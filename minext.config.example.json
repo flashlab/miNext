@@ -1,0 +1,88 @@
+{
+  "httpPort": 3000,
+  "lanHost": "192.168.x.x",
+  "musicDirs": [
+    "/home/user/music/download"
+  ],
+  "audioExtensions": [
+    ".mp3",
+    ".flac",
+    ".wav",
+    ".m4a",
+    ".aac",
+    ".ogg"
+  ],
+  "dbPath": "data/minext.db",
+  "search": {
+    "maxResults": 20,
+    "artistSeparators": [
+      "唱的",
+      "的歌"
+    ],
+    "albumSeparators": [
+      "专辑歌曲",
+      "中的"
+    ]
+  },
+  "player": {
+    "timerBufferSec": 1.5,
+    "replyInterruptCooldownSec": 1.2,
+    "replyInterruptTimeoutSec": 20,
+    "autoResumeDelaySec": 1.8
+  },
+  "speakers": [
+    {
+      "id": "s4389",
+      "name": "小爱音箱 · 4389",
+      "wsPort": 4389
+    },
+    {
+      "id": "s4399",
+      "name": "小爱音箱 · 4399",
+      "wsPort": 4399
+    }
+  ],
+  "commands": {
+    "playKeywords": [
+      "播放本地"
+    ],
+    "stopKeywords": [
+      "停止播放",
+      "暂停播放",
+      "停止",
+      "暂停",
+      "闭嘴",
+      "别放了",
+      "不要放了",
+      "关机"
+    ],
+    "previousKeywords": [
+      "上一首",
+      "上一曲"
+    ],
+    "nextKeywords": [
+      "下一首",
+      "下一曲"
+    ],
+    "refreshKeywords": [
+      "刷新曲库"
+    ],
+    "randomPlayKeywords": [
+      "随便听听"
+    ],
+    "continueKeywords": [
+      "继续播放",
+      "继续"
+    ],
+    "interruptWhitelistKeywords": [
+      "音量",
+      "声音",
+      "大点声",
+      "小点声",
+      "调大音量",
+      "调小音量",
+      "静音",
+      "取消静音"
+    ]
+  }
+}

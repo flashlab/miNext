@@ -1,0 +1,15 @@
+{
+  "name": "minext",
+  "version": "0.1.0",
+  "private": true,
+  "description": "统一小爱音箱管理工具(Bun 全栈)",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "start": "bun run src/index.ts",
+    "smoke": "bun run scripts/smoke-ws.ts"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.14",
+    "typescript": "^7.0.2"
+  }
+}
