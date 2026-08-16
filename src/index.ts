@@ -3,6 +3,7 @@ import { loadConfig } from "./config";
 import { LibraryDb } from "./library/db";
 import { Indexer } from "./library/indexer";
 import { SpeakerRegistry } from "./registry";
+import { PluginRegistry } from "./plugins/registry";
 import { createHttpServer } from "./http/server";
 
 const cfg = await loadConfig(process.env.MINEXT_CONFIG ?? "minext.config.json");
@@ -55,5 +56,7 @@ void indexer.refresh()
   .then((n) => console.log(`曲库索引完成: ${n} 首`))
   .catch((e) => console.error("索引失败:", e));
 
-createHttpServer({ cfg, db, indexer, registry, getDirs, getDefaultDir, webDist: "web/dist" });
+const plugins = new PluginRegistry(db);
+
+createHttpServer({ cfg, db, indexer, registry, plugins, getDirs, getDefaultDir, webDist: "web/dist" });
 console.log(`HTTP 监听 :${cfg.httpPort}(API + 音乐文件 + SPA)`);

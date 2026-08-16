@@ -3,6 +3,8 @@ import type { AppConfig } from "../config";
 import type { LibraryDb, SpeakerRow } from "../library/db";
 import type { Indexer } from "../library/indexer";
 import type { SpeakerRegistry } from "../registry";
+import type { PluginRegistry } from "../plugins/registry";
+import { listJobs, startDownload } from "../jobs";
 import type { LoopMode } from "../player/engine";
 import { rename, unlink, mkdir, rmdir } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
@@ -21,6 +23,7 @@ export interface HttpDeps {
   db: LibraryDb;
   indexer: Indexer;
   registry: SpeakerRegistry;
+  plugins: PluginRegistry;
   getDirs: () => string[];
   getDefaultDir: () => string;
   webDist: string;
@@ -73,13 +76,81 @@ async function serveFile(path: string, req: Request): Promise<Response> {
 }
 
 export function createHttpServer(deps: HttpDeps) {
-  const { cfg, db, indexer, registry, getDirs, getDefaultDir, webDist } = deps;
+  const { cfg, db, indexer, registry, plugins, getDirs, getDefaultDir, webDist } = deps;
 
   const inLibrary = (p: string) => getDirs().some((d) => normalize(p).startsWith(normalize(d)));
 
   async function api(req: Request, url: URL): Promise<Response> {
     const parts = url.pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
     const method = req.method;
+
+    // ===== /api/plugins & /api/dl =====
+    if (parts[0] === "plugins") {
+      if (parts.length === 1 && method === "GET") {
+        return json({
+          plugins: plugins.view(),
+          shared: { "chksz.apiKey": db.getSetting("shared.chksz.apiKey") ?? "" },
+        });
+      }
+      if (parts[1] === "shared" && method === "PUT") {
+        const body = (await req.json()) as { key?: string; value?: string };
+        if (!body.key || !/^[a-z0-9._-]+$/i.test(body.key)) return err("非法 key");
+        plugins.saveShared(body.key, body.value ?? "");
+        return json({ ok: true });
+      }
+      if (parts[1] && parts[2] === "settings" && method === "PUT") {
+        const body = (await req.json()) as Record<string, unknown>;
+        const r = plugins.saveSettings(parts[1], body);
+        if (!r.ok) return err(r.error, 409);
+        return json({ ok: true });
+      }
+      return err("not found", 404);
+    }
+
+    if (parts[0] === "dl") {
+      if (parts[1] === "search" && method === "GET") {
+        const q = url.searchParams.get("q")?.trim();
+        if (!q) return err("缺少 q");
+        const view = plugins.view();
+        const searches: Promise<unknown[]>[] = [];
+        for (const p of plugins.searchPlugins()) {
+          for (const src of p.sources) {
+            const sv = view.find((v) => v.id === p.id)?.sources.find((s) => s.id === src.id);
+            if (!sv?.enabled) continue;
+            searches.push(
+              p.search(src.id, q, sv.limit ?? 20, plugins.ctx)
+                .then((r) => r as unknown[])
+                .catch((e: Error) => [{ __error: String(e?.message ?? e), __source: src.id }]),
+            );
+          }
+        }
+        const settled = await Promise.all(searches);
+        const results: unknown[] = [];
+        const errors: { source: string; error: string }[] = [];
+        for (const r of settled.flat() as Record<string, unknown>[]) {
+          if (r.__error) errors.push({ source: String(r.__source ?? "?"), error: String(r.__error) });
+          else results.push(r);
+        }
+        return json({ results, errors });
+      }
+      if (parts[1] === "download" && method === "POST") {
+        const body = (await req.json()) as {
+          source?: string; id?: string; url?: string; quality?: string; dir?: string;
+          meta?: { title?: string; artist?: string; album?: string };
+        };
+        if (!body.dir) return err("缺少目标目录");
+        if (!body.url && !body.id) return err("缺少 id 或链接");
+        const job = startDownload(
+          { source: body.source ?? "url", id: body.id, url: body.url, quality: body.quality, dir: body.dir, meta: body.meta },
+          plugins, indexer, (d) => getDirs().includes(d),
+        );
+        return json({ ok: true, job });
+      }
+      if (parts[1] === "jobs" && method === "GET") {
+        return json({ jobs: listJobs() });
+      }
+      return err("not found", 404);
+    }
 
     // ===== /api/speakers =====
     if (parts[0] === "speakers") {

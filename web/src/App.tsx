@@ -5,6 +5,7 @@ import { usePoll } from "@/lib/usePoll";
 import { useTheme, ThemeToggle } from "@/lib/theme";
 import { SpeakersTab } from "@/components/SpeakersTab";
 import { MusicTab } from "@/components/MusicTab";
+import { DownloadTab } from "@/components/DownloadTab";
 import { PlayerTab } from "@/components/PlayerTab";
 import { ToolsTab } from "@/components/ToolsTab";
 
@@ -31,7 +32,8 @@ export default function App() {
           <TabsList className="mb-3 h-8">
             <TabsTrigger value="speakers" className="text-xs">实例</TabsTrigger>
             <TabsTrigger value="player" className="text-xs">播放</TabsTrigger>
-            <TabsTrigger value="music" className="text-xs">音乐</TabsTrigger>
+            <TabsTrigger value="music" className="text-xs">本地</TabsTrigger>
+            <TabsTrigger value="download" className="text-xs">下载</TabsTrigger>
             <TabsTrigger value="tools" className="text-xs">工具</TabsTrigger>
           </TabsList>
           <TabsContent value="speakers">
@@ -42,6 +44,9 @@ export default function App() {
           </TabsContent>
           <TabsContent value="music">
             <MusicTab speakers={speakers ?? []} />
+          </TabsContent>
+          <TabsContent value="download">
+            <DownloadTab />
           </TabsContent>
           <TabsContent value="tools">
             <ToolsTab speakers={speakers ?? []} />
