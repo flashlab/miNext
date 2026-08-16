@@ -1,0 +1,13 @@
+[Unit]
+Description=miNext - 统一小爱音箱管理(Bun)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/miNext
+ExecStart=%h/.local/bin/bun run src/index.ts
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

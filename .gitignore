@@ -1,0 +1,9 @@
+node_modules/
+web/node_modules/
+web/dist/
+data/
+ref/
+*.tar.gz
+.env
+minext.config.json
+!minext.config.example.json
