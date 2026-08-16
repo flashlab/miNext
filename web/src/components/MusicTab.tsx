@@ -121,6 +121,7 @@ function LibraryDialog({ onChanged }: { onChanged: () => void }) {
 }
 
 export function MusicTab({ speakers }: { speakers: Speaker[] }) {
+  const visibleSpeakers = speakers.filter((s) => !s.hidden);
   const [q, setQ] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [sort, setSort] = useState<SortField | "">("");
@@ -175,11 +176,11 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
         <Input value={q} onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && (setSubmitted(q.trim()), setPage(0))}
           placeholder="搜索歌名 / 歌手 / 专辑 / 文件名,空格分隔组合…"
-          className="h-8 border-border bg-transparent text-xs" />
+          className="h-8 min-w-48 flex-1 border-border bg-transparent text-xs" />
         <Button size="sm" variant="outline" className="h-8 border-border bg-transparent text-xs"
           onClick={() => (setSubmitted(q.trim()), setPage(0))}>搜索</Button>
         <LibraryDialog onChanged={reload} />
@@ -193,7 +194,7 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
               播放 <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
-              {speakers.map((s) => (
+              {visibleSpeakers.map((s) => (
                 <DropdownMenuItem key={s.id} onClick={() => batchPlay(s.id)}>{s.name}</DropdownMenuItem>
               ))}
             </DropdownMenuContent>
@@ -203,7 +204,7 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
               加入播放列表 <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
-              {speakers.map((s) => (
+              {visibleSpeakers.map((s) => (
                 <DropdownMenuItem key={s.id} onClick={() => batchAppend(s.id)}>{s.name}</DropdownMenuItem>
               ))}
             </DropdownMenuContent>
@@ -213,8 +214,8 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
         </div>
       )}
 
-      <div className="rounded border border-border">
-        <table className="w-full">
+      <div className="overflow-x-auto rounded border border-border">
+        <table className="w-full min-w-[640px]">
           <thead>
             <tr className="border-b border-border">
               <th className="w-8 px-2 py-2 text-left">
@@ -222,7 +223,7 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
               </th>
               <th className="px-2 py-2 text-left text-muted-foreground"><SortHead label="标题" field="title" sort={sort} order={order} onSort={onSort} /></th>
               <th className="px-2 py-2 text-left text-muted-foreground"><SortHead label="歌手" field="artist" sort={sort} order={order} onSort={onSort} /></th>
-              <th className="hidden px-2 py-2 text-left text-muted-foreground sm:table-cell"><SortHead label="专辑" field="album" sort={sort} order={order} onSort={onSort} /></th>
+              <th className="px-2 py-2 text-left text-muted-foreground"><SortHead label="专辑" field="album" sort={sort} order={order} onSort={onSort} /></th>
               <th className="w-16 px-2 py-2 text-right text-muted-foreground"><SortHead label="时长" field="duration" sort={sort} order={order} onSort={onSort} /></th>
             </tr>
           </thead>
@@ -232,7 +233,7 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
                 <td className="px-2 py-1.5"><Checkbox checked={selected.has(s.path)} onCheckedChange={() => toggleOne(s.path)} /></td>
                 <td className="max-w-52 truncate px-2 py-1.5 text-xs text-foreground">{s.title || s.filename}</td>
                 <td className="max-w-28 truncate px-2 py-1.5 text-xs text-muted-foreground">{s.artist || "—"}</td>
-                <td className="hidden max-w-28 truncate px-2 py-1.5 text-xs text-muted-foreground sm:table-cell">{s.album || "—"}</td>
+                <td className="max-w-28 truncate px-2 py-1.5 text-xs text-muted-foreground">{s.album || "—"}</td>
                 <td className="px-2 py-1.5 text-right font-mono text-xs text-muted-foreground">{fmtDuration(s.duration_sec)}</td>
               </tr>
             ))}

@@ -25,6 +25,9 @@ if (db.listSpeakers().length === 0 && cfg.speakers.length) {
       name: sp.name,
       ws_port: sp.wsPort,
       commands: "{}",
+      hidden: 0,
+      token: "",
+      last_ip: "",
       created_at: Date.now(),
     });
   }

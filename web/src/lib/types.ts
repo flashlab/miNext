@@ -39,6 +39,9 @@ export interface Speaker {
   name: string;
   wsPort: number;
   commands: SpeakerCommands;
+  hidden: boolean;
+  token: string;
+  lastIp: string;
   online: boolean;
   lastEventAt: number | null;
   playing: PlayingStatus;

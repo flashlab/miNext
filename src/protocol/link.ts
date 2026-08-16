@@ -61,6 +61,7 @@ export class SpeakerLink {
 
   online = false;
   lastEventAt = 0;
+  lastIp = "";
   playing: "Playing" | "Paused" | "Idle" = "Idle";
   deviceInfo: { model?: string; sn?: string } = {};
 
@@ -90,6 +91,7 @@ export class SpeakerLink {
     this.ws = ws;
     this.online = true;
     this.lastEventAt = Date.now();
+    this.lastIp = ws.remoteAddress ?? "";
     this.handlers.onConnect?.();
   }
 

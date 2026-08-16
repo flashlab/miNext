@@ -154,27 +154,30 @@ function PlayerCard({ speaker }: { speaker: Speaker }) {
           <Button size="sm" variant="outline" className="h-7 w-7 border-border bg-transparent p-0" onClick={() => api.playerAction(speaker.id, "prev").then(reload)}>
             <SkipBack className="h-3.5 w-3.5" />
           </Button>
-          <Button size="sm" variant="outline" className="h-7 w-7 border-border bg-transparent p-0" title={playing ? "停止" : "播放"}
-            onClick={() => api.toggle(speaker.id).then(reload).catch((e) => toast.error(String(e)))}>
-            {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger className="inline-flex h-7 items-center rounded-md border border-border bg-transparent px-1.5 text-xs hover:bg-accent">
-              <ChevronDown className="h-3.5 w-3.5" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="min-w-36">
-              {playing ? (
-                <DropdownMenuItem onClick={() =>
-                  api.setStopAfterCurrent(speaker.id, !state?.stopAfterCurrent).then(reload).catch((e) => toast.error(String(e)))}>
-                  {state?.stopAfterCurrent ? "取消播完即停" : "播完当前即停"}
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem onClick={() => api.playerAction(speaker.id, "next").then(reload)}>
-                  直接播放下一首
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* split button:播放/停止 toggle + 贴边下拉 */}
+          <div className="flex">
+            <Button size="sm" variant="outline" className="h-7 w-7 rounded-r-none border-border bg-transparent p-0" title={playing ? "停止" : "播放"}
+              onClick={() => api.toggle(speaker.id).then(reload).catch((e) => toast.error(String(e)))}>
+              {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger className="inline-flex h-7 items-center rounded-md rounded-l-none border border-l-0 border-border bg-transparent px-1 text-xs hover:bg-accent">
+                <ChevronDown className="h-3.5 w-3.5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-36">
+                {playing ? (
+                  <DropdownMenuItem onClick={() =>
+                    api.setStopAfterCurrent(speaker.id, !state?.stopAfterCurrent).then(reload).catch((e) => toast.error(String(e)))}>
+                    {state?.stopAfterCurrent ? "取消播完即停" : "播完当前即停"}
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem onClick={() => api.playerAction(speaker.id, "next").then(reload)}>
+                    直接播放下一首
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
           <Button size="sm" variant="outline" className="h-7 border-border bg-transparent px-2 text-xs"
             onClick={() => api.playerAction(speaker.id, "random").then(reload).catch((e) => toast.error(String(e)))}>
             <Shuffle className="mr-1 h-3 w-3" />随便听听
@@ -212,9 +215,11 @@ function KeywordPlay({ speakerId, onDone }: { speakerId: string; onDone: () => v
 }
 
 export function PlayerTab({ speakers }: { speakers: Speaker[] }) {
+  const visible = speakers.filter((s) => !s.hidden);
   return (
     <div className="grid gap-3 md:grid-cols-2">
-      {speakers.map((s) => <PlayerCard key={s.id} speaker={s} />)}
+      {visible.map((s) => <PlayerCard key={s.id} speaker={s} />)}
+      {!visible.length && <p className="text-xs text-muted-foreground">没有可见实例(全部已隐藏)</p>}
     </div>
   );
 }

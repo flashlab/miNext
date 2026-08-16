@@ -41,6 +41,7 @@ export class SpeakerRegistry {
 
   /** 启动/重绑一台音箱的 WS 端口 */
   bind(row: SpeakerRow): SpeakerRuntime {
+    const deps = this.deps;
     const existing = this.runtimes.get(row.id);
     if (existing) this.unbind(row.id);
 
@@ -58,11 +59,19 @@ export class SpeakerRegistry {
     const server = Bun.serve({
       port: row.ws_port,
       fetch(req, srv) {
+        // token 门控:公网部署时音箱 URL 需带 /ws/<token>
+        if (row.token) {
+          const p = new URL(req.url).pathname.replace(/\/+$/, "");
+          if (p !== `/ws/${row.token}`) return new Response("unauthorized", { status: 401 });
+        }
         if (srv.upgrade(req, { data: undefined })) return;
         return new Response("open-xiaoai ws endpoint", { status: 200 });
       },
       websocket: {
-        open(ws: ServerWebSocket<any>) { link.attach(ws); },
+        open(ws: ServerWebSocket<any>) {
+          link.attach(ws);
+          if (link.lastIp) deps.db.updateSpeaker(row.id, { last_ip: link.lastIp });
+        },
         close(ws: ServerWebSocket<any>) { link.detach(ws); },
         message(ws: ServerWebSocket<any>, message: string | Buffer) { link.handleMessage(message); },
       },

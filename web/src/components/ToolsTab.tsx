@@ -63,9 +63,10 @@ function ShellTool({ speakerId }: { speakerId: string }) {
 }
 
 export function ToolsTab({ speakers }: { speakers: Speaker[] }) {
+  const visible = speakers.filter((s) => !s.hidden);
   return (
     <div className="grid gap-3 md:grid-cols-2">
-      {speakers.map((s) => (
+      {visible.map((s) => (
         <Card key={s.id} className="border-border bg-card shadow-none">
           <CardHeader className="flex flex-row items-center justify-between py-3">
             <CardTitle className="text-sm font-medium">{s.name}</CardTitle>

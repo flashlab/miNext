@@ -23,6 +23,9 @@ export interface SpeakerRow {
   name: string;
   ws_port: number;
   commands: string; // JSON: CommandsConfig 的子集(每实例覆盖)
+  hidden: number;
+  token: string; // 非空时 WS 需走 /ws/<token> 路径(公网门控)
+  last_ip: string;
   created_at: number;
 }
 
@@ -68,6 +71,13 @@ export class LibraryDb {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )`);
+    // 列级迁移(老库补列)
+    const cols = new Set(
+      (this.db.query("PRAGMA table_info(speakers)").all() as { name: string }[]).map((c) => c.name),
+    );
+    if (!cols.has("hidden")) this.db.run("ALTER TABLE speakers ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
+    if (!cols.has("token")) this.db.run("ALTER TABLE speakers ADD COLUMN token TEXT NOT NULL DEFAULT ''");
+    if (!cols.has("last_ip")) this.db.run("ALTER TABLE speakers ADD COLUMN last_ip TEXT NOT NULL DEFAULT ''");
   }
 
   // ---- settings ----
@@ -92,13 +102,16 @@ export class LibraryDb {
     return this.db.query("SELECT * FROM speakers ORDER BY ws_port").all() as SpeakerRow[];
   }
   addSpeaker(s: SpeakerRow) {
-    this.db.run("INSERT INTO speakers (id,name,ws_port,commands,created_at) VALUES (?,?,?,?,?)",
-      [s.id, s.name, s.ws_port, s.commands, s.created_at]);
+    this.db.run("INSERT INTO speakers (id,name,ws_port,commands,hidden,token,last_ip,created_at) VALUES (?,?,?,?,?,?,?,?)",
+      [s.id, s.name, s.ws_port, s.commands, s.hidden ?? 0, s.token ?? "", s.last_ip ?? "", s.created_at]);
   }
-  updateSpeaker(id: string, patch: { name?: string; ws_port?: number; commands?: string }) {
+  updateSpeaker(id: string, patch: { name?: string; ws_port?: number; commands?: string; hidden?: number; token?: string; last_ip?: string }) {
     if (patch.name !== undefined) this.db.run("UPDATE speakers SET name=? WHERE id=?", [patch.name, id]);
     if (patch.ws_port !== undefined) this.db.run("UPDATE speakers SET ws_port=? WHERE id=?", [patch.ws_port, id]);
     if (patch.commands !== undefined) this.db.run("UPDATE speakers SET commands=? WHERE id=?", [patch.commands, id]);
+    if (patch.hidden !== undefined) this.db.run("UPDATE speakers SET hidden=? WHERE id=?", [patch.hidden, id]);
+    if (patch.token !== undefined) this.db.run("UPDATE speakers SET token=? WHERE id=?", [patch.token, id]);
+    if (patch.last_ip !== undefined) this.db.run("UPDATE speakers SET last_ip=? WHERE id=?", [patch.last_ip, id]);
   }
   deleteSpeaker(id: string) {
     this.db.run("DELETE FROM speakers WHERE id=?", [id]);
