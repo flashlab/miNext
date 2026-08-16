@@ -15,9 +15,9 @@ const post = <T = unknown>(path: string, body?: unknown): Promise<T> =>
 
 export const api = {
   speakers: () => req<Speaker[]>("/api/speakers"),
-  addSpeaker: (body: { wsPort: number; name?: string; commands?: SpeakerCommands }) =>
+  addSpeaker: (body: { wsPort: number; name?: string; commands?: SpeakerCommands; token?: string }) =>
     post("/api/speakers", body),
-  updateSpeaker: (id: string, body: { name?: string; wsPort?: number; commands?: SpeakerCommands }) =>
+  updateSpeaker: (id: string, body: { name?: string; wsPort?: number; commands?: SpeakerCommands; hidden?: boolean; token?: string }) =>
     req(`/api/speakers/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteSpeaker: (id: string) => req(`/api/speakers/${id}`, { method: "DELETE" }),
   reconnect: (id: string) => post(`/api/speakers/${id}/reconnect`),

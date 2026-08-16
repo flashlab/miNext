@@ -128,3 +128,7 @@
     @apply font-sans;
     }
 }
+/* 全局:按钮文字不换行 */
+button, [role="button"], [role="tab"] {
+  white-space: nowrap;
+}

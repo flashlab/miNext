@@ -90,6 +90,9 @@ export function createHttpServer(deps: HttpDeps) {
             name: rt.row.name,
             wsPort: rt.row.ws_port,
             commands: JSON.parse(rt.row.commands || "{}"),
+            hidden: Boolean(rt.row.hidden),
+            token: rt.row.token,
+            lastIp: rt.link.lastIp || rt.row.last_ip || "",
             online: rt.link.online,
             lastEventAt: rt.link.lastEventAt || null,
             playing: rt.link.playing,
@@ -102,7 +105,7 @@ export function createHttpServer(deps: HttpDeps) {
           }))));
         }
         if (method === "POST") {
-          const body = (await req.json()) as { wsPort?: number; name?: string; commands?: Record<string, string[]> };
+          const body = (await req.json()) as { wsPort?: number; name?: string; commands?: Record<string, string[]>; token?: string };
           if (!body.wsPort || body.wsPort < 1024 || body.wsPort > 65535) return err("非法端口");
           if (db.listSpeakers().some((s) => s.ws_port === body.wsPort)) return err("端口已被占用", 409);
           const row: SpeakerRow = {
@@ -110,6 +113,9 @@ export function createHttpServer(deps: HttpDeps) {
             name: body.name?.trim() || `音箱-${body.wsPort}`,
             ws_port: body.wsPort,
             commands: JSON.stringify(body.commands ?? {}),
+            hidden: 0,
+            token: body.token?.trim() ?? "",
+            last_ip: "",
             created_at: Date.now(),
           };
           db.addSpeaker(row);
@@ -123,14 +129,16 @@ export function createHttpServer(deps: HttpDeps) {
       if (!rt) return err(`未知音箱: ${id}`, 404);
 
       if (!action && method === "PUT") {
-        const body = (await req.json()) as { name?: string; wsPort?: number; commands?: Record<string, string[]> };
+        const body = (await req.json()) as { name?: string; wsPort?: number; commands?: Record<string, string[]>; hidden?: boolean; token?: string };
         if (body.wsPort !== undefined && (body.wsPort < 1024 || body.wsPort > 65535)) return err("非法端口");
         if (body.wsPort !== undefined && body.wsPort !== rt.row.ws_port &&
             db.listSpeakers().some((s) => s.ws_port === body.wsPort)) return err("端口已被占用", 409);
-        const patch: { name?: string; ws_port?: number; commands?: string } = {};
+        const patch: { name?: string; ws_port?: number; commands?: string; hidden?: number; token?: string } = {};
         if (body.name !== undefined) patch.name = body.name.trim() || rt.row.name;
         if (body.wsPort !== undefined) patch.ws_port = body.wsPort;
         if (body.commands !== undefined) patch.commands = JSON.stringify(body.commands);
+        if (body.hidden !== undefined) patch.hidden = body.hidden ? 1 : 0;
+        if (body.token !== undefined) patch.token = body.token.trim();
         db.updateSpeaker(id, patch);
         const row = db.listSpeakers().find((s) => s.id === id)!;
         registry.reconfigure(row);
