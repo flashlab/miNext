@@ -187,7 +187,7 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
       </div>
 
       {selected.size > 0 && (
-        <div className="flex items-center gap-2 rounded border border-amber-500/40 bg-amber-500/5 px-2 py-1.5">
+        <div className="flex flex-wrap items-center gap-2 rounded border border-amber-500/40 bg-amber-500/5 px-2 py-1.5">
           <Badge variant="outline" className="border-amber-500/60 text-amber-500">已选 {selected.size}</Badge>
           <DropdownMenu>
             <DropdownMenuTrigger className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-transparent px-2 text-xs hover:bg-accent">
