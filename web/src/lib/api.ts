@@ -1,4 +1,4 @@
-import type { AlbumInfo, DirsInfo, LoopMode, PlayerState, Song, Speaker, SpeakerCommands } from "./types";
+import type { AlbumInfo, DirsInfo, DlJob, DlResult, LoopMode, PlayerState, PluginView, Song, Speaker, SpeakerCommands } from "./types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, {
@@ -62,6 +62,18 @@ export const api = {
   toolPlayUrl: (id: string, url: string) => post<{ ok: boolean; stdout: string }>(`/api/tools/${id}/play-url`, { url }),
   toolShell: (id: string, script: string) =>
     post<{ ok: boolean; stdout: string; stderr: string }>(`/api/tools/${id}/shell`, { script }),
+
+  // ---- 插件/下载 ----
+  plugins: () => req<{ plugins: PluginView[]; shared: Record<string, string> }>("/api/plugins"),
+  saveShared: (key: string, value: string) =>
+    req("/api/plugins/shared", { method: "PUT", body: JSON.stringify({ key, value }) }),
+  savePluginSettings: (id: string, body: unknown) =>
+    req(`/api/plugins/${id}/settings`, { method: "PUT", body: JSON.stringify(body) }),
+  dlSearch: (q: string) =>
+    req<{ results: DlResult[]; errors: { source: string; error: string }[] }>(`/api/dl/search?q=${encodeURIComponent(q)}`),
+  dlDownload: (body: { source: string; id?: string; url?: string; quality?: string; dir: string; meta?: { title?: string; artist?: string; album?: string } }) =>
+    post<{ ok: boolean; job: DlJob }>("/api/dl/download", body),
+  dlJobs: () => req<{ jobs: DlJob[] }>("/api/dl/jobs"),
 };
 
 export function fmtDuration(sec: number): string {

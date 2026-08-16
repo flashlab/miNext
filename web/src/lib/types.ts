@@ -59,3 +59,43 @@ export interface DirsInfo {
   dirs: string[];
   defaultDir: string;
 }
+
+// ---- 插件/下载 ----
+export interface PluginSourceView {
+  id: string;
+  name: string;
+  enabled: boolean;
+  limit?: number;
+  qualities?: string[];
+  supportedQualities?: string[];
+}
+
+export interface PluginView {
+  id: string;
+  kind: "search" | "download";
+  name: string;
+  sources: PluginSourceView[];
+  extra: Record<string, unknown> & { hasToken?: boolean };
+}
+
+export interface DlResult {
+  plugin: string;
+  source: string;
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration: number;
+  cover: string;
+}
+
+export interface DlJob {
+  id: number;
+  label: string;
+  dir: string;
+  status: "running" | "done" | "failed";
+  error?: string;
+  savedPath?: string;
+  createdAt: number;
+  finishedAt?: number;
+}
