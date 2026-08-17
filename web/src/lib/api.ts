@@ -78,6 +78,9 @@ export const api = {
   dlJobs: () => req<{ jobs: DlJob[] }>("/api/dl/jobs"),
 };
 
+/** 曲库文件的 HTTP 播放地址(服务端 /music/ 带 Range) */
+export const musicUrl = (path: string) => "/music" + path.split("/").map(encodeURIComponent).join("/");
+
 export function fmtDuration(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);

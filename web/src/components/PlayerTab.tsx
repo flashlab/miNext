@@ -204,10 +204,10 @@ function KeywordPlay({ speakerId, onDone }: { speakerId: string; onDone: () => v
   const [kw, setKw] = useState("");
   const go = () => kw.trim() && api.play(speakerId, { keyword: kw.trim() }).then(onDone).catch((e) => toast.error(String(e)));
   return (
-    <div className="flex min-w-40 flex-1 gap-1.5">
+    <div className="flex min-w-40 flex-1">
       <Input value={kw} onChange={(e) => setKw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && go()}
-        placeholder="关键词点播(同语音语义)…" className="h-7 border-border bg-transparent text-xs" />
-      <Button size="sm" variant="outline" className="h-7 shrink-0 border-border bg-transparent text-xs" onClick={go}>播放</Button>
+        placeholder="关键词点播(同语音语义)…" className="h-7 rounded-r-none border-r-0 border-border bg-transparent text-xs" />
+      <Button size="sm" variant="outline" className="h-7 shrink-0 rounded-l-none border-border bg-transparent text-xs" onClick={go}>播放</Button>
     </div>
   );
 }

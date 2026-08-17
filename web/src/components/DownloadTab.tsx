@@ -30,7 +30,6 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
   const [key, setKey] = useState(shared["chksz.apiKey"] ?? "");
   const [relayUrl, setRelayUrl] = useState(String(plugin.extra.relayUrl ?? ""));
   const [token, setToken] = useState("");
-  const [dlDir, setDlDir] = useState(sharedDir);
   const [sources, setSources] = useState<Record<string, { enabled: boolean; limit: number; qualities: string[] }>>(() =>
     Object.fromEntries(plugin.sources.map((s) => [s.id, { enabled: s.enabled, limit: s.limit ?? 20, qualities: s.qualities ?? s.supportedQualities ?? [] }])),
   );
@@ -41,7 +40,6 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
   const save = async () => {
     try {
       if (isChksz) await api.saveShared("chksz.apiKey", key.trim());
-      if (isHermes) await api.saveShared("dl.dir", dlDir);
       const body: Record<string, unknown> = { sources };
       if (isHermes) {
         body.relayUrl = relayUrl.trim();
@@ -57,7 +55,7 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (v) { setKey(shared["chksz.apiKey"] ?? ""); setDlDir(sharedDir); } }}>
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (v) setKey(shared["chksz.apiKey"] ?? ""); }}>
       <DialogTrigger className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-transparent px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">
         <Settings className="h-3 w-3" />设置
       </DialogTrigger>
@@ -84,14 +82,7 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
                   placeholder={plugin.extra.hasToken ? "已配置(留空保持不变)" : "relay 共享密钥"}
                   className="h-7 border-border bg-transparent font-mono text-xs" />
               </div>
-              <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2">
-                <Label className="text-right text-[11px] text-muted-foreground">下载目录</Label>
-                <div className="flex gap-1.5">
-                  <Input value={dlDir} readOnly className="h-7 min-w-0 flex-1 border-border bg-muted/40 font-mono text-xs text-muted-foreground" />
-                  <DirTreePicker value={dlDir} onSelect={setDlDir} />
-                </div>
-              </div>
-              <p className="text-[11px] text-muted-foreground">下载目录为所有插件共享;YouTube 账号 cookies 在 Hermes 侧维护。</p>
+              <p className="text-[11px] text-muted-foreground">YouTube 账号 cookies 在 Hermes 侧维护,这里无需配置。</p>
             </>
           )}
           <div className="space-y-2">
@@ -242,7 +233,16 @@ export function DownloadTab() {
         ))}
       </div>
 
-      {/* 直接下载(Hermes):输入框 + 下载按钮 */}
+      {/* 共享下载目录:直观展示 + 树选 */}
+      <div className="flex items-center gap-1.5">
+        <Label className="shrink-0 text-xs text-muted-foreground">下载目录(共享)</Label>
+        <div className="min-w-0 flex-1 truncate rounded border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+          {sharedDir || "未设置"}
+        </div>
+        <DirTreePicker value={sharedDir} onSelect={(p) => {
+          api.saveShared("dl.dir", p).then(() => { toast.success("下载目录已更新"); reloadPlugins(); }).catch((e) => toast.error(String(e)));
+        }} />
+      </div>
       {hermesPlugin && (
         <div className="flex gap-1.5">
           <Input value={directUrl} onChange={(e) => setDirectUrl(e.target.value)}

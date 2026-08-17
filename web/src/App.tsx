@@ -3,6 +3,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { api } from "@/lib/api";
 import { usePoll } from "@/lib/usePoll";
 import { useTheme, ThemeToggle } from "@/lib/theme";
+import { version } from "../package.json";
 import { SpeakersTab } from "@/components/SpeakersTab";
 import { MusicTab } from "@/components/MusicTab";
 import { DownloadTab } from "@/components/DownloadTab";
@@ -55,9 +56,10 @@ export default function App() {
 
         <footer className="mt-6 text-center text-[11px] text-muted-foreground">
           🌱 Built by{" "}
-          <a className="underline decoration-border hover:text-foreground" href="https://linux.do/u/zzbd/summary" target="_blank" rel="noreferrer">
+          <a className="underline decoration-border hover:text-foreground" href="https://github.com/flashlab" target="_blank" rel="noreferrer">
             ZZBD
           </a>
+          {" "}· v{version}
         </footer>
       </div>
       <Toaster position="bottom-right" />
