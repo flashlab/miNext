@@ -10,13 +10,33 @@ function apikey(ctx: PluginCtx): string {
   return k;
 }
 
-async function call<T>(path: string): Promise<T> {
+async function callOnce<T>(path: string): Promise<T> {
   const r = await fetch(`${BASE}${path}`, { signal: AbortSignal.timeout(20000) });
   if (r.status === 429) throw new Error("触发 chksz 频率限制(20 次/分钟),请稍后再试");
   if (r.status === 401) throw new Error("chksz API Key 无效");
   const j = (await r.json()) as { code?: number; msg?: string };
-  if (j.code !== undefined && j.code !== 200) throw new Error(`chksz: ${j.msg ?? `code ${j.code}`}`);
+  if (j.code !== undefined && j.code !== 200) {
+    const msg = j.msg ?? `code ${j.code}`;
+    const e = new Error(`chksz: ${msg}`) as Error & { retryable?: boolean };
+    // 上游并发抖动会被映射成误导性的 404/未找到,标记可重试
+    if (j.code === 404 || j.code === 502 || j.code === 504 || /未找到匹配/.test(msg)) e.retryable = true;
+    throw e;
+  }
   return j as T;
+}
+
+async function call<T>(path: string): Promise<T> {
+  let lastErr: Error & { retryable?: boolean } = new Error("unreachable") as never;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await callOnce<T>(path);
+    } catch (e) {
+      lastErr = e as Error & { retryable?: boolean };
+      if (!lastErr.retryable) throw lastErr;
+      await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 function extFromUrl(url: string, fallback = "mp3"): string {

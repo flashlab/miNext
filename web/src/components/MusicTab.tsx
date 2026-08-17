@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { api, fmtDuration } from "@/lib/api";
 import type { DirsInfo, Speaker } from "@/lib/types";
+import { DirTreePicker } from "@/components/DirTreePicker";
 import { usePoll } from "@/lib/usePoll";
 import { toast } from "sonner";
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ChevronDown, FolderCog } from "lucide-react";
@@ -89,12 +90,12 @@ function LibraryDialog({ onChanged }: { onChanged: () => void }) {
           <Separator className="bg-border" />
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">上传音乐</Label>
-            <Select value={effectiveUploadDir} onValueChange={(v) => v && setUploadDir(v)}>
-              <SelectTrigger className="h-7 border-border bg-transparent font-mono text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {dirs.map((d) => <SelectItem key={d} value={d} className="font-mono text-xs">{d}{d === defaultDir ? "(默认)" : ""}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-1.5">
+              <div className="min-w-0 flex-1 truncate rounded border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+                {effectiveUploadDir || "未选择"}
+              </div>
+              <DirTreePicker value={effectiveUploadDir} onSelect={(p) => setUploadDir(p)} />
+            </div>
             <input ref={fileRef} type="file" accept=".mp3,.flac,.wav,.m4a,.aac,.ogg" className="text-xs text-muted-foreground" />
             <Button size="sm" disabled={busy} className="h-7 bg-amber-500 text-xs text-zinc-950 hover:bg-amber-400"
               onClick={() => {

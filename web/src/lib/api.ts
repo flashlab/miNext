@@ -73,6 +73,8 @@ export const api = {
     req<{ results: DlResult[]; errors: { source: string; error: string }[] }>(`/api/dl/search?q=${encodeURIComponent(q)}`),
   dlDownload: (body: { source: string; id?: string; url?: string; quality?: string; dir: string; meta?: { title?: string; artist?: string; album?: string } }) =>
     post<{ ok: boolean; job: DlJob }>("/api/dl/download", body),
+  libraryTree: (path: string) => req<{ path: string; dirs: string[] }>(`/api/library/tree?path=${encodeURIComponent(path)}`),
+  dlResolve: (source: string, id: string) => post<{ ok: boolean; fileUrl: string }>("/api/dl/resolve", { source, id }),
   dlJobs: () => req<{ jobs: DlJob[] }>("/api/dl/jobs"),
 };
 

@@ -78,7 +78,11 @@ async function serveFile(path: string, req: Request): Promise<Response> {
 export function createHttpServer(deps: HttpDeps) {
   const { cfg, db, indexer, registry, plugins, getDirs, getDefaultDir, webDist } = deps;
 
-  const inLibrary = (p: string) => getDirs().some((d) => normalize(p).startsWith(normalize(d)));
+  const inLibrary = (p: string) => getDirs().some((d) => {
+    const np = normalize(p);
+    const nd = normalize(d).replace(/\/+$/, "");
+    return np === nd || np.startsWith(nd + "/");
+  });
 
   async function api(req: Request, url: URL): Promise<Response> {
     const parts = url.pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
@@ -89,7 +93,10 @@ export function createHttpServer(deps: HttpDeps) {
       if (parts.length === 1 && method === "GET") {
         return json({
           plugins: plugins.view(),
-          shared: { "chksz.apiKey": db.getSetting("shared.chksz.apiKey") ?? "" },
+          shared: {
+            "chksz.apiKey": db.getSetting("shared.chksz.apiKey") ?? "",
+            "dl.dir": db.getSetting("shared.dl.dir") ?? "",
+          },
         });
       }
       if (parts[1] === "shared" && method === "PUT") {
@@ -142,12 +149,26 @@ export function createHttpServer(deps: HttpDeps) {
         if (!body.url && !body.id) return err("缺少 id 或链接");
         const job = startDownload(
           { source: body.source ?? "url", id: body.id, url: body.url, quality: body.quality, dir: body.dir, meta: body.meta },
-          plugins, indexer, (d) => getDirs().includes(d),
+          plugins, indexer, (d) => inLibrary(d),
         );
         return json({ ok: true, job });
       }
       if (parts[1] === "jobs" && method === "GET") {
         return json({ jobs: listJobs() });
+      }
+      // 试听:以最低音质解析直链(不下载)
+      if (parts[1] === "resolve" && method === "POST") {
+        const body = (await req.json()) as { source?: string; id?: string };
+        if (!body.source || !body.id) return err("缺少 source/id");
+        const plugin = plugins.downloadPluginFor(body.source);
+        if (!plugin) return err(`音源 ${body.source} 没有已启用的下载插件`, 404);
+        const lowest = plugin.qualities?.[body.source]?.[0];
+        try {
+          const r = await plugin.resolve({ source: body.source, id: body.id, quality: lowest }, plugins.ctx);
+          return json({ ok: true, fileUrl: r.fileUrl });
+        } catch (e) {
+          return err(String((e as Error).message || e), 502);
+        }
       }
       return err("not found", 404);
     }
@@ -229,6 +250,21 @@ export function createHttpServer(deps: HttpDeps) {
 
     // ===== /api/library =====
     if (parts[0] === "library") {
+      // 目录树:?path=<abs> → 直接子目录(仅曲库范围内)
+      if (parts[1] === "tree" && method === "GET") {
+        const p = url.searchParams.get("path") ?? "";
+        if (!p || !inLibrary(normalize(p))) return err("路径不在曲库范围内", 403);
+        try {
+          const entries = await readdir(p, { withFileTypes: true });
+          const dirs = entries
+            .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+            .map((e) => e.name)
+            .sort();
+          return json({ path: p, dirs });
+        } catch {
+          return err("目录不可读", 400);
+        }
+      }
       if (parts[1] === "refresh" && method === "POST") {
         if (indexer.isRefreshing) return err("索引刷新进行中", 409);
         void indexer.refresh().then(
