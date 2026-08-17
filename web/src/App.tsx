@@ -43,10 +43,10 @@ export default function App() {
           <TabsContent value="player">
             <PlayerTab speakers={speakers ?? []} />
           </TabsContent>
-          <TabsContent value="music">
+          <TabsContent value="music" keepMounted>
             <MusicTab speakers={speakers ?? []} />
           </TabsContent>
-          <TabsContent value="download">
+          <TabsContent value="download" keepMounted>
             <DownloadTab />
           </TabsContent>
           <TabsContent value="tools">
