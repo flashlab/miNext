@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -14,12 +14,12 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
-import { api, fmtDuration } from "@/lib/api";
-import type { DirsInfo, Speaker } from "@/lib/types";
+import { api, fmtDuration, musicUrl } from "@/lib/api";
+import type { DirsInfo, Song, Speaker } from "@/lib/types";
 import { DirTreePicker } from "@/components/DirTreePicker";
 import { usePoll } from "@/lib/usePoll";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ChevronDown, FolderCog } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ChevronDown, FolderCog, ListMusic, MonitorPlay, Pause, Play, SkipBack, SkipForward, Trash2 } from "lucide-react";
 
 type SortField = "title" | "artist" | "album" | "duration";
 
@@ -164,7 +164,70 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
     setPage(0);
   };
 
+  // ---- 浏览器本地播放器 ----
+  const [localList, setLocalList] = useState<Song[]>([]);
+  const [localIdx, setLocalIdx] = useState(0);
+  const [localPlaying, setLocalPlaying] = useState(false);
+  const [showLocalList, setShowLocalList] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const s = localList[localIdx];
+    if (!s) return;
+    audioRef.current?.pause();
+    const a = new Audio(musicUrl(s.path));
+    a.onended = () => {
+      if (localIdx < localList.length - 1) setLocalIdx(localIdx + 1);
+      else setLocalPlaying(false);
+    };
+    audioRef.current = a;
+    if (localPlaying) a.play().catch(() => setLocalPlaying(false));
+    return () => a.pause();
+  }, [localIdx, localList]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const localToggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (localPlaying) { a.pause(); setLocalPlaying(false); }
+    else { a.play().then(() => setLocalPlaying(true)).catch((e) => toast.error(String(e))); }
+  };
+  const localStep = (d: number) => {
+    const n = localIdx + d;
+    if (n >= 0 && n < localList.length) setLocalIdx(n);
+  };
+  const localClear = () => {
+    audioRef.current?.pause();
+    audioRef.current = null;
+    setLocalList([]);
+    setLocalIdx(0);
+    setLocalPlaying(false);
+    setShowLocalList(false);
+  };
+  const localPlayFrom = (i: number) => { setLocalIdx(i); setLocalPlaying(true); };
+
   const paths = [...selected];
+  const selSongs: Song[] = paths.map((p) =>
+    songs.find((s) => s.path === p) ??
+    { id: -1, path: p, title: p.split("/").pop() ?? p, artist: "", album: "", filename: "", dir: "", ext: "", duration_sec: 0, size: 0 },
+  );
+  const localPlay = () => {
+    if (!selSongs.length) return;
+    setLocalList(selSongs);
+    setLocalIdx(0);
+    setLocalPlaying(true);
+    toast.success(`浏览器播放 ${selSongs.length} 首`);
+  };
+  const localAppend = () => {
+    if (!selSongs.length) return;
+    setLocalList((prev) => {
+      const have = new Set(prev.map((s) => s.path));
+      const next = [...prev, ...selSongs.filter((s) => !have.has(s.path))];
+      if (!prev.length) { setLocalIdx(0); setLocalPlaying(true); }
+      return next;
+    });
+    toast.success(`已加入浏览器播放列表`);
+  };
+
   const batchPlay = (speakerId: string) =>
     api.play(speakerId, { paths }).then(() => toast.success(`已在目标音箱播放 ${paths.length} 首`)).catch((e) => toast.error(String(e)));
   const batchAppend = (speakerId: string) =>
@@ -177,6 +240,48 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
 
   return (
     <div className="space-y-3">
+      {localList.length > 0 && (
+        <div className="space-y-0 rounded border border-amber-500/40 bg-amber-500/5">
+          <div className="flex flex-wrap items-center gap-2 px-2 py-1.5">
+            <MonitorPlay className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <button className="h-6 w-6 shrink-0 rounded text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => localStep(-1)} disabled={localIdx <= 0}>
+              <SkipBack className="mx-auto h-3.5 w-3.5" />
+            </button>
+            <button className="h-6 w-6 shrink-0 rounded text-amber-500 hover:bg-accent" onClick={localToggle}>
+              {localPlaying ? <Pause className="mx-auto h-3.5 w-3.5" /> : <Play className="mx-auto h-3.5 w-3.5" />}
+            </button>
+            <button className="h-6 w-6 shrink-0 rounded text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => localStep(1)} disabled={localIdx >= localList.length - 1}>
+              <SkipForward className="mx-auto h-3.5 w-3.5" />
+            </button>
+            <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+              {localList[localIdx]?.title}
+              {localList[localIdx]?.artist ? <span className="text-muted-foreground"> · {localList[localIdx].artist}</span> : null}
+            </span>
+            <span className="font-mono text-[10px] text-muted-foreground">{localIdx + 1}/{localList.length}</span>
+            {localList.length > 1 && (
+              <Button size="sm" variant="ghost" className={`h-6 px-1.5 text-[11px] ${showLocalList ? "text-amber-500" : "text-muted-foreground"}`}
+                onClick={() => setShowLocalList(!showLocalList)}>
+                <ListMusic className="h-3.5 w-3.5" />列表
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px] text-red-500" onClick={localClear}>
+              <Trash2 className="h-3.5 w-3.5" />清空
+            </Button>
+          </div>
+          {showLocalList && localList.length > 1 && (
+            <div className="max-h-48 overflow-y-auto border-t border-amber-500/20">
+              {localList.map((s, i) => (
+                <button key={`${s.path}-${i}`} onClick={() => localPlayFrom(i)}
+                  className={`flex w-full items-center gap-2 px-2 py-1 text-left text-xs hover:bg-accent ${i === localIdx ? "text-amber-500" : "text-foreground"}`}>
+                  <span className="w-6 shrink-0 text-right font-mono text-[10px] text-muted-foreground">{i + 1}</span>
+                  <span className="min-w-0 flex-1 truncate">{s.title}{s.artist ? <span className="text-muted-foreground"> · {s.artist}</span> : null}</span>
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{s.duration_sec ? fmtDuration(s.duration_sec) : ""}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap gap-1.5">
         <Input value={q} onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && (setSubmitted(q.trim()), setPage(0))}
@@ -195,6 +300,9 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
               播放 <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
+              <DropdownMenuItem onClick={localPlay}>
+                <MonitorPlay className="mr-1 h-3.5 w-3.5" />本地
+              </DropdownMenuItem>
               {visibleSpeakers.map((s) => (
                 <DropdownMenuItem key={s.id} onClick={() => batchPlay(s.id)}>{s.name}</DropdownMenuItem>
               ))}
@@ -205,6 +313,9 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
               加入播放列表 <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
+              <DropdownMenuItem onClick={localAppend}>
+                <MonitorPlay className="mr-1 h-3.5 w-3.5" />本地
+              </DropdownMenuItem>
               {visibleSpeakers.map((s) => (
                 <DropdownMenuItem key={s.id} onClick={() => batchAppend(s.id)}>{s.name}</DropdownMenuItem>
               ))}
