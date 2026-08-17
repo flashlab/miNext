@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,28 +6,31 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import { api, fmtDuration } from "@/lib/api";
 import type { DirsInfo, DlResult, PluginView } from "@/lib/types";
+import { DirTreePicker } from "@/components/DirTreePicker";
 import { usePoll } from "@/lib/usePoll";
 import { toast } from "sonner";
-import { Download, Loader2, Settings } from "lucide-react";
+import { ChevronDown, Download, Loader2, Pause, Play, Settings } from "lucide-react";
 
 const SOURCE_NAMES: Record<string, string> = { wy: "网易云", tx: "QQ音乐", kg: "酷狗", url: "直链" };
 
-function PluginSettingsDialog({ plugin, shared, onChanged }: {
+function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
   plugin: PluginView;
   shared: Record<string, string>;
+  sharedDir: string;
   onChanged: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [key, setKey] = useState(shared["chksz.apiKey"] ?? "");
   const [relayUrl, setRelayUrl] = useState(String(plugin.extra.relayUrl ?? ""));
   const [token, setToken] = useState("");
+  const [dlDir, setDlDir] = useState(sharedDir);
   const [sources, setSources] = useState<Record<string, { enabled: boolean; limit: number; qualities: string[] }>>(() =>
     Object.fromEntries(plugin.sources.map((s) => [s.id, { enabled: s.enabled, limit: s.limit ?? 20, qualities: s.qualities ?? s.supportedQualities ?? [] }])),
   );
@@ -38,6 +41,7 @@ function PluginSettingsDialog({ plugin, shared, onChanged }: {
   const save = async () => {
     try {
       if (isChksz) await api.saveShared("chksz.apiKey", key.trim());
+      if (isHermes) await api.saveShared("dl.dir", dlDir);
       const body: Record<string, unknown> = { sources };
       if (isHermes) {
         body.relayUrl = relayUrl.trim();
@@ -53,7 +57,7 @@ function PluginSettingsDialog({ plugin, shared, onChanged }: {
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (v) { setKey(shared["chksz.apiKey"] ?? ""); setDlDir(sharedDir); } }}>
       <DialogTrigger className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-transparent px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">
         <Settings className="h-3 w-3" />设置
       </DialogTrigger>
@@ -80,7 +84,14 @@ function PluginSettingsDialog({ plugin, shared, onChanged }: {
                   placeholder={plugin.extra.hasToken ? "已配置(留空保持不变)" : "relay 共享密钥"}
                   className="h-7 border-border bg-transparent font-mono text-xs" />
               </div>
-              <p className="text-[11px] text-muted-foreground">YouTube 账号 cookies 在 Hermes 侧维护,这里无需配置。</p>
+              <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2">
+                <Label className="text-right text-[11px] text-muted-foreground">下载目录</Label>
+                <div className="flex gap-1.5">
+                  <Input value={dlDir} readOnly className="h-7 min-w-0 flex-1 border-border bg-muted/40 font-mono text-xs text-muted-foreground" />
+                  <DirTreePicker value={dlDir} onSelect={setDlDir} />
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">下载目录为所有插件共享;YouTube 账号 cookies 在 Hermes 侧维护。</p>
             </>
           )}
           <div className="space-y-2">
@@ -133,71 +144,37 @@ function PluginSettingsDialog({ plugin, shared, onChanged }: {
   );
 }
 
-function DownloadDialog({ result, dirs, downloadPlugin, onStarted }: {
-  result: DlResult;
-  dirs: DirsInfo;
-  downloadPlugin?: PluginView;
-  onStarted: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const srcView = downloadPlugin?.sources.find((s) => s.id === result.source);
-  const qualities = (srcView?.qualities?.length ? srcView.qualities : srcView?.supportedQualities) ?? [];
-  const [quality, setQuality] = useState("");
-  const [dir, setDir] = useState(dirs.defaultDir || dirs.dirs[0] || "");
-  const [busy, setBusy] = useState(false);
+/** 试听状态:全局单 Audio 实例 */
+function usePreview() {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [previewKey, setPreviewKey] = useState("");
+  const [loading, setLoading] = useState("");
 
-  const go = () => {
-    setBusy(true);
-    api.dlDownload({
-      source: result.source,
-      id: result.id,
-      quality: quality || qualities[0],
-      dir,
-      meta: { title: result.title, artist: result.artist, album: result.album },
-    })
-      .then(() => { toast.success("下载已开始"); setOpen(false); onStarted(); })
-      .catch((e) => toast.error(String(e)))
-      .finally(() => setBusy(false));
+  const toggle = async (r: DlResult) => {
+    const key = `${r.source}:${r.id}`;
+    if (previewKey === key) {
+      audioRef.current?.pause();
+      audioRef.current = null;
+      setPreviewKey("");
+      return;
+    }
+    setLoading(key);
+    try {
+      const d = await api.dlResolve(r.source, r.id);
+      audioRef.current?.pause();
+      const a = new Audio(d.fileUrl);
+      a.onended = () => setPreviewKey("");
+      a.onerror = () => { setPreviewKey(""); toast.error("试听播放失败"); };
+      audioRef.current = a;
+      await a.play();
+      setPreviewKey(key);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setLoading("");
+    }
   };
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger className="inline-flex h-6 items-center gap-1 rounded border border-border bg-transparent px-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground">
-        <Download className="h-3 w-3" />下载
-      </DialogTrigger>
-      <DialogContent className="border-border bg-background sm:max-w-md">
-        <DialogHeader><DialogTitle className="text-sm">下载 · {result.title}</DialogTitle></DialogHeader>
-        <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">{result.artist} · {result.album || "—"} · {SOURCE_NAMES[result.source]}</p>
-          {qualities.length > 0 && (
-            <div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-2">
-              <Label className="text-right text-[11px] text-muted-foreground">音质</Label>
-              <Select value={quality || qualities[0]} onValueChange={(v) => v && setQuality(v)}>
-                <SelectTrigger className="h-7 border-border bg-transparent text-xs"><SelectValue>{(v: string) => v}</SelectValue></SelectTrigger>
-                <SelectContent>
-                  {qualities.map((q) => <SelectItem key={q} value={q}>{q}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          <div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-2">
-            <Label className="text-right text-[11px] text-muted-foreground">保存到</Label>
-            <Select value={dir} onValueChange={(v) => v && setDir(v)}>
-              <SelectTrigger className="h-7 border-border bg-transparent font-mono text-xs"><SelectValue>{(v: string) => v}</SelectValue></SelectTrigger>
-              <SelectContent>
-                {dirs.dirs.map((d) => <SelectItem key={d} value={d} className="font-mono text-xs">{d}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex justify-end">
-            <Button size="sm" disabled={busy} className="h-7 bg-amber-500 text-xs text-zinc-950 hover:bg-amber-400" onClick={go}>
-              {busy ? "创建中…" : "开始下载"}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
+  return { previewKey, loading, toggle };
 }
 
 export function DownloadTab() {
@@ -209,13 +186,13 @@ export function DownloadTab() {
   const [errors, setErrors] = useState<{ source: string; error: string }[]>([]);
   const [searching, setSearching] = useState(false);
   const [directUrl, setDirectUrl] = useState("");
-  const [directDir, setDirectDir] = useState("");
+  const preview = usePreview();
 
   const plugins = pluginData?.plugins ?? [];
   const shared = pluginData?.shared ?? {};
   const downloadPlugin = plugins.find((p) => p.id === "chksz-download");
   const hermesPlugin = plugins.find((p) => p.id === "hermes-download");
-  const effDirectDir = directDir || dirs?.defaultDir || dirs?.dirs[0] || "";
+  const sharedDir = shared["dl.dir"] || dirs?.defaultDir || dirs?.dirs[0] || "";
 
   const search = () => {
     if (!q.trim()) return;
@@ -228,8 +205,17 @@ export function DownloadTab() {
 
   const directGo = () => {
     if (!directUrl.trim()) return;
-    api.dlDownload({ source: "url", url: directUrl.trim(), dir: effDirectDir })
+    api.dlDownload({ source: "url", url: directUrl.trim(), dir: sharedDir })
       .then(() => { toast.success("已交给 Hermes 下载"); setDirectUrl(""); reloadJobs(); })
+      .catch((e) => toast.error(String(e)));
+  };
+
+  const downloadWith = (r: DlResult, quality?: string) => {
+    api.dlDownload({
+      source: r.source, id: r.id, quality, dir: sharedDir,
+      meta: { title: r.title, artist: r.artist, album: r.album },
+    })
+      .then(() => { toast.success(`已开始下载(${quality || "默认音质"})`); reloadJobs(); })
       .catch((e) => toast.error(String(e)));
   };
 
@@ -241,7 +227,7 @@ export function DownloadTab() {
           <Card key={p.id} className="border-border bg-card shadow-none">
             <CardHeader className="flex flex-row items-center justify-between py-2">
               <CardTitle className="text-xs font-medium">{p.name}</CardTitle>
-              <PluginSettingsDialog plugin={p} shared={shared} onChanged={reloadPlugins} />
+              <PluginSettingsDialog plugin={p} shared={shared} sharedDir={sharedDir} onChanged={reloadPlugins} />
             </CardHeader>
             <CardContent className="py-1.5">
               <div className="flex flex-wrap gap-1">
@@ -256,20 +242,16 @@ export function DownloadTab() {
         ))}
       </div>
 
-      {/* 直接下载(Hermes) */}
+      {/* 直接下载(Hermes):输入框 + 下载按钮 */}
       {hermesPlugin && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex gap-1.5">
           <Input value={directUrl} onChange={(e) => setDirectUrl(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && directGo()}
             placeholder="粘贴链接交给 Hermes 下载(YouTube/B 站等)…"
-            className="h-8 min-w-56 flex-1 border-border bg-transparent text-xs" />
-          <Select value={effDirectDir} onValueChange={(v) => v && setDirectDir(v)}>
-            <SelectTrigger className="h-8 w-48 border-border bg-transparent font-mono text-xs"><SelectValue>{(v: string) => v}</SelectValue></SelectTrigger>
-            <SelectContent>
-              {(dirs?.dirs ?? []).map((d) => <SelectItem key={d} value={d} className="font-mono text-xs">{d}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Button size="sm" variant="outline" className="h-8 border-border bg-transparent text-xs" onClick={directGo}>下载链接</Button>
+            className="h-8 min-w-0 flex-1 border-border bg-transparent text-xs" />
+          <Button size="sm" variant="outline" className="h-8 shrink-0 border-border bg-transparent text-xs" onClick={directGo}>
+            <Download className="h-3.5 w-3.5" />
+          </Button>
         </div>
       )}
 
@@ -291,7 +273,7 @@ export function DownloadTab() {
         </div>
       )}
 
-      {results.length > 0 && dirs && (
+      {results.length > 0 && (
         <div className="overflow-x-auto rounded border border-border">
           <table className="w-full min-w-[560px]">
             <thead>
@@ -302,29 +284,58 @@ export function DownloadTab() {
                 <th className="hidden px-2 py-2 sm:table-cell">专辑</th>
                 <th className="px-2 py-2">源</th>
                 <th className="w-14 px-2 py-2 text-right">时长</th>
-                <th className="w-16 px-2 py-2"></th>
+                <th className="w-20 px-2 py-2"></th>
               </tr>
             </thead>
             <tbody>
-              {results.map((r, i) => (
-                <tr key={`${r.source}-${r.id}-${i}`} className="border-b border-border/60 last:border-0 hover:bg-accent/50">
-                  <td className="px-2 py-1.5">
-                    {r.cover
-                      ? <img src={r.cover} loading="lazy" referrerPolicy="no-referrer" className="h-7 w-7 rounded object-cover" alt="" />
-                      : <div className="h-7 w-7 rounded bg-muted" />}
-                  </td>
-                  <td className="max-w-44 truncate px-2 py-1.5 text-xs text-foreground">{r.title}</td>
-                  <td className="max-w-24 truncate px-2 py-1.5 text-xs text-muted-foreground">{r.artist || "—"}</td>
-                  <td className="hidden max-w-28 truncate px-2 py-1.5 text-xs text-muted-foreground sm:table-cell">{r.album || "—"}</td>
-                  <td className="px-2 py-1.5">
-                    <Badge variant="outline" className="border-border text-[10px] text-muted-foreground">{SOURCE_NAMES[r.source] ?? r.source}</Badge>
-                  </td>
-                  <td className="px-2 py-1.5 text-right font-mono text-xs text-muted-foreground">{r.duration ? fmtDuration(r.duration) : "—"}</td>
-                  <td className="px-2 py-1.5">
-                    <DownloadDialog result={r} dirs={dirs} downloadPlugin={downloadPlugin} onStarted={reloadJobs} />
-                  </td>
-                </tr>
-              ))}
+              {results.map((r, i) => {
+                const key = `${r.source}:${r.id}`;
+                const isPreviewing = preview.previewKey === key;
+                const isLoading = preview.loading === key;
+                const qualities = downloadPlugin?.sources.find((s) => s.id === r.source)?.qualities ?? [];
+                return (
+                  <tr key={`${key}-${i}`} className="border-b border-border/60 last:border-0 hover:bg-accent/50">
+                    <td className="px-2 py-1.5">
+                      <button
+                        className="group relative block h-7 w-7 overflow-hidden rounded"
+                        title={isPreviewing ? "停止试听" : "试听(最低音质)"}
+                        onClick={() => preview.toggle(r)}
+                      >
+                        {r.cover
+                          ? <img src={r.cover} loading="lazy" referrerPolicy="no-referrer" className="h-7 w-7 object-cover" alt="" />
+                          : <div className="h-7 w-7 bg-muted" />}
+                        <span className={`absolute inset-0 flex items-center justify-center bg-black/50 text-white transition-opacity ${
+                          isPreviewing || isLoading ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+                          {isLoading
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : isPreviewing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                        </span>
+                      </button>
+                    </td>
+                    <td className="max-w-44 truncate px-2 py-1.5 text-xs text-foreground">{r.title}</td>
+                    <td className="max-w-24 truncate px-2 py-1.5 text-xs text-muted-foreground">{r.artist || "—"}</td>
+                    <td className="hidden max-w-28 truncate px-2 py-1.5 text-xs text-muted-foreground sm:table-cell">{r.album || "—"}</td>
+                    <td className="px-2 py-1.5">
+                      <Badge variant="outline" className="border-border text-[10px] text-muted-foreground">{SOURCE_NAMES[r.source] ?? r.source}</Badge>
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono text-xs text-muted-foreground">{r.duration ? fmtDuration(r.duration) : "—"}</td>
+                    <td className="px-2 py-1.5">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger className="inline-flex h-6 items-center gap-0.5 rounded border border-border bg-transparent px-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground">
+                          <Download className="h-3 w-3" /><ChevronDown className="h-3 w-3" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-28">
+                          {(qualities.length ? qualities : [undefined]).map((qu) => (
+                            <DropdownMenuItem key={qu ?? "default"} onClick={() => downloadWith(r, qu)}>
+                              {qu ?? "默认音质"}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -333,7 +344,7 @@ export function DownloadTab() {
       {/* 任务列表 */}
       {(jobsData?.jobs.length ?? 0) > 0 && (
         <div className="space-y-1">
-          <Label className="text-xs text-muted-foreground">下载任务</Label>
+          <Label className="text-xs text-muted-foreground">下载任务 · 保存到 <span className="font-mono">{sharedDir}</span></Label>
           <div className="rounded border border-border">
             {jobsData!.jobs.map((j) => (
               <div key={j.id} className="flex items-center gap-2 border-b border-border/60 px-2 py-1.5 text-xs last:border-0">
