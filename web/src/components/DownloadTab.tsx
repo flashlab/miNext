@@ -28,23 +28,16 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
 }) {
   const [open, setOpen] = useState(false);
   const [key, setKey] = useState(shared["chksz.apiKey"] ?? "");
-  const [relayUrl, setRelayUrl] = useState(String(plugin.extra.relayUrl ?? ""));
-  const [token, setToken] = useState("");
   const [sources, setSources] = useState<Record<string, { enabled: boolean; limit: number; qualities: string[] }>>(() =>
     Object.fromEntries(plugin.sources.map((s) => [s.id, { enabled: s.enabled, limit: s.limit ?? 20, qualities: s.qualities ?? s.supportedQualities ?? [] }])),
   );
 
   const isChksz = plugin.id.startsWith("chksz");
-  const isHermes = plugin.id === "hermes-download";
 
   const save = async () => {
     try {
       if (isChksz) await api.saveShared("chksz.apiKey", key.trim());
       const body: Record<string, unknown> = { sources };
-      if (isHermes) {
-        body.relayUrl = relayUrl.trim();
-        if (token.trim()) body.token = token.trim();
-      }
       await api.savePluginSettings(plugin.id, body);
       toast.success("已保存");
       setOpen(false);
@@ -68,22 +61,6 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
               <Input value={key} onChange={(e) => setKey(e.target.value)} placeholder="chksz_..."
                 className="h-7 border-border bg-transparent font-mono text-xs" />
             </div>
-          )}
-          {isHermes && (
-            <>
-              <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2">
-                <Label className="text-right text-[11px] text-muted-foreground">Relay 地址</Label>
-                <Input value={relayUrl} onChange={(e) => setRelayUrl(e.target.value)} placeholder="http://<hermes-host>:18320"
-                  className="h-7 border-border bg-transparent font-mono text-xs" />
-              </div>
-              <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2">
-                <Label className="text-right text-[11px] text-muted-foreground">Token</Label>
-                <Input value={token} onChange={(e) => setToken(e.target.value)}
-                  placeholder={plugin.extra.hasToken ? "已配置(留空保持不变)" : "relay 共享密钥"}
-                  className="h-7 border-border bg-transparent font-mono text-xs" />
-              </div>
-              <p className="text-[11px] text-muted-foreground">YouTube 账号 cookies 在 Hermes 侧维护,这里无需配置。</p>
-            </>
           )}
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">音源</Label>
@@ -176,13 +153,11 @@ export function DownloadTab() {
   const [results, setResults] = useState<DlResult[]>([]);
   const [errors, setErrors] = useState<{ source: string; error: string }[]>([]);
   const [searching, setSearching] = useState(false);
-  const [directUrl, setDirectUrl] = useState("");
   const preview = usePreview();
 
   const plugins = pluginData?.plugins ?? [];
   const shared = pluginData?.shared ?? {};
   const downloadPlugin = plugins.find((p) => p.id === "chksz-download");
-  const hermesPlugin = plugins.find((p) => p.id === "hermes-download");
   const sharedDir = shared["dl.dir"] || dirs?.defaultDir || dirs?.dirs[0] || "";
 
   const search = () => {
@@ -192,13 +167,6 @@ export function DownloadTab() {
       .then((d) => { setResults(d.results); setErrors(d.errors); })
       .catch((e) => toast.error(String(e)))
       .finally(() => setSearching(false));
-  };
-
-  const directGo = () => {
-    if (!directUrl.trim()) return;
-    api.dlDownload({ source: "url", url: directUrl.trim(), dir: sharedDir })
-      .then(() => { toast.success("已交给 Hermes 下载"); setDirectUrl(""); reloadJobs(); })
-      .catch((e) => toast.error(String(e)));
   };
 
   const downloadWith = (r: DlResult, quality?: string) => {
@@ -243,18 +211,6 @@ export function DownloadTab() {
           api.saveShared("dl.dir", p).then(() => { toast.success("下载目录已更新"); reloadPlugins(); }).catch((e) => toast.error(String(e)));
         }} />
       </div>
-      {hermesPlugin && (
-        <div className="flex gap-1.5">
-          <Input value={directUrl} onChange={(e) => setDirectUrl(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && directGo()}
-            placeholder="粘贴链接交给 Hermes 下载(YouTube/B 站等)…"
-            className="h-8 min-w-0 flex-1 border-border bg-transparent text-xs" />
-          <Button size="sm" variant="outline" className="h-8 shrink-0 border-border bg-transparent text-xs" onClick={directGo}>
-            <Download className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      )}
-
       {/* 搜索 */}
       <div className="flex flex-wrap gap-1.5">
         <Input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()}

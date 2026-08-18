@@ -2,7 +2,6 @@
 import type { LibraryDb } from "../library/db";
 import type { AnyPlugin, DownloadPlugin, PluginCtx, SearchPlugin } from "./types";
 import { chkszDownload, chkszSearch } from "./chksz";
-import { hermesDownload } from "./hermes";
 
 export interface SourceSetting {
   enabled: boolean;
@@ -19,7 +18,7 @@ export interface PluginPublicView {
 }
 
 export class PluginRegistry {
-  readonly plugins: AnyPlugin[] = [chkszSearch, chkszDownload, hermesDownload];
+  readonly plugins: AnyPlugin[] = [chkszSearch, chkszDownload];
 
   constructor(private db: LibraryDb) {}
 
@@ -38,7 +37,7 @@ export class PluginRegistry {
     const s = this.getPluginSettings(p.id) as { sources?: Record<string, SourceSetting> };
     const v = s.sources?.[sourceId];
     if (v) return v;
-    // 默认:chksz 搜索/下载三源默认开;hermes url 默认开
+    // 默认:chksz 搜索/下载三源默认开
     return { enabled: true, limit: 20, qualities: p.kind === "download" ? (p.qualities?.[sourceId] ?? []) : undefined };
   }
 
