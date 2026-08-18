@@ -27,16 +27,15 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
   onChanged: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [key, setKey] = useState(shared["chksz.apiKey"] ?? "");
+  const keyField = plugin.id.startsWith("chksz") ? "chksz.apiKey" : plugin.id.startsWith("ynx") ? "ynx.apiKey" : "";
+  const [key, setKey] = useState(keyField ? (shared[keyField] ?? "") : "");
   const [sources, setSources] = useState<Record<string, { enabled: boolean; limit: number; qualities: string[] }>>(() =>
     Object.fromEntries(plugin.sources.map((s) => [s.id, { enabled: s.enabled, limit: s.limit ?? 20, qualities: s.qualities ?? s.supportedQualities ?? [] }])),
   );
 
-  const isChksz = plugin.id.startsWith("chksz");
-
   const save = async () => {
     try {
-      if (isChksz) await api.saveShared("chksz.apiKey", key.trim());
+      if (keyField) await api.saveShared(keyField, key.trim());
       const body: Record<string, unknown> = { sources };
       await api.savePluginSettings(plugin.id, body);
       toast.success("已保存");
@@ -48,17 +47,17 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (v) setKey(shared["chksz.apiKey"] ?? ""); }}>
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (v && keyField) setKey(shared[keyField] ?? ""); }}>
       <DialogTrigger className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-transparent px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">
         <Settings className="h-3 w-3" />设置
       </DialogTrigger>
       <DialogContent className="max-h-[85vh] overflow-y-auto border-border bg-background sm:max-w-lg">
         <DialogHeader><DialogTitle className="text-sm">{plugin.name} · 设置</DialogTitle></DialogHeader>
         <div className="space-y-4">
-          {isChksz && (
+          {keyField && (
             <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2">
               <Label className="text-right text-[11px] text-muted-foreground">API Key(共享)</Label>
-              <Input value={key} onChange={(e) => setKey(e.target.value)} placeholder="chksz_..."
+              <Input value={key} onChange={(e) => setKey(e.target.value)} placeholder={keyField === "ynx.apiKey" ? "枫雨 api-v2.yuafeng.cn 注册获取" : "chksz_..."}
                 className="h-7 border-border bg-transparent font-mono text-xs" />
             </div>
           )}
@@ -248,7 +247,9 @@ export function DownloadTab() {
                 const key = `${r.source}:${r.id}`;
                 const isPreviewing = preview.previewKey === key;
                 const isLoading = preview.loading === key;
-                const qualities = downloadPlugin?.sources.find((s) => s.id === r.source)?.qualities ?? [];
+                const qualities = (r.extra?.qualities as string[] | undefined)
+                  ?? downloadPlugin?.sources.find((s) => s.id === r.source)?.qualities
+                  ?? [];
                 return (
                   <tr key={`${key}-${i}`} className="border-b border-border/60 last:border-0 hover:bg-accent/50">
                     <td className="px-2 py-1.5">

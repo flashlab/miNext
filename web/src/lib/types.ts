@@ -84,9 +84,10 @@ export interface DlResult {
   id: string;
   title: string;
   artist: string;
-  album: string;
-  duration: number;
-  cover: string;
+  album?: string;
+  duration?: number;
+  cover?: string;
+  extra?: Record<string, unknown>;
 }
 
 export interface DlJob {

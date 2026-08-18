@@ -2,6 +2,7 @@
 import type { LibraryDb } from "../library/db";
 import type { AnyPlugin, DownloadPlugin, PluginCtx, SearchPlugin } from "./types";
 import { chkszDownload, chkszSearch } from "./chksz";
+import { ynxDownload, ynxSearch } from "./ynx";
 
 export interface SourceSetting {
   enabled: boolean;
@@ -18,7 +19,7 @@ export interface PluginPublicView {
 }
 
 export class PluginRegistry {
-  readonly plugins: AnyPlugin[] = [chkszSearch, chkszDownload];
+  readonly plugins: AnyPlugin[] = [chkszSearch, chkszDownload, ynxSearch, ynxDownload];
 
   constructor(private db: LibraryDb) {}
 
@@ -37,8 +38,9 @@ export class PluginRegistry {
     const s = this.getPluginSettings(p.id) as { sources?: Record<string, SourceSetting> };
     const v = s.sources?.[sourceId];
     if (v) return v;
-    // 默认:chksz 搜索/下载三源默认开
-    return { enabled: true, limit: 20, qualities: p.kind === "download" ? (p.qualities?.[sourceId] ?? []) : undefined };
+    // 默认:chksz 三源全开;声明了 defaultEnabledSources 的插件(如枫雨)仅开白名单内的源
+    const enabled = p.defaultEnabledSources ? p.defaultEnabledSources.includes(sourceId) : true;
+    return { enabled, limit: 20, qualities: p.kind === "download" ? (p.qualities?.[sourceId] ?? []) : undefined };
   }
 
   sourceEnabled(p: AnyPlugin, sourceId: string): boolean {
