@@ -73,7 +73,7 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
             <>
               <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2">
                 <Label className="text-right text-[11px] text-muted-foreground">Relay 地址</Label>
-                <Input value={relayUrl} onChange={(e) => setRelayUrl(e.target.value)} placeholder="http://192.18.7.4:18320"
+                <Input value={relayUrl} onChange={(e) => setRelayUrl(e.target.value)} placeholder="http://<hermes-host>:18320"
                   className="h-7 border-border bg-transparent font-mono text-xs" />
               </div>
               <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2">

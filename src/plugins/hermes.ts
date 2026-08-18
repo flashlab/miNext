@@ -18,7 +18,8 @@ export const hermesDownload: DownloadPlugin = {
   async resolve({ url }, ctx): Promise<ResolvedAudio> {
     if (!url) throw new Error("Hermes 下载需要链接");
     const s = ctx.getSetting("hermes-download") as { relayUrl?: string; token?: string };
-    const base = (s.relayUrl || "http://192.18.7.4:18320").replace(/\/+$/, "");
+    const base = (s.relayUrl || "").replace(/\/+$/, "");
+    if (!base) throw new Error("未配置 Hermes relay 地址(插件设置中填写)");
     const r = await fetch(`${base}/api/download`, {
       method: "POST",
       headers: {
