@@ -10,9 +10,10 @@ export interface SearchResultItem {
   id: string;
   title: string;
   artist: string;
-  album: string;
-  duration: number; // 秒,0 = 未知
-  cover: string;
+  album?: string;
+  duration?: number;
+  cover?: string;
+  extra?: Record<string, unknown>;
 }
 
 export interface ResolvedAudio {
@@ -34,6 +35,8 @@ export interface SearchPlugin {
   id: string;
   name: string;
   sources: SourceDef[];
+  /** 声明后:未保存设置时仅这些源默认启用(避免与既有插件默认撞源) */
+  defaultEnabledSources?: string[];
   search(source: string, query: string, limit: number, ctx: PluginCtx): Promise<SearchResultItem[]>;
 }
 
@@ -42,6 +45,7 @@ export interface DownloadPlugin {
   id: string;
   name: string;
   sources: SourceDef[]; // 直链类插件用 [{ id: "url" }]
+  defaultEnabledSources?: string[];
   qualities?: Record<string, string[]>; // source → 支持的音质
   resolve(input: { source: string; id?: string; url?: string; quality?: string }, ctx: PluginCtx): Promise<ResolvedAudio>;
 }

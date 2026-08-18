@@ -95,6 +95,7 @@ export function createHttpServer(deps: HttpDeps) {
           plugins: plugins.view(),
           shared: {
             "chksz.apiKey": db.getSetting("shared.chksz.apiKey") ?? "",
+            "ynx.apiKey": db.getSetting("shared.ynx.apiKey") ?? "",
             "dl.dir": db.getSetting("shared.dl.dir") ?? "",
           },
         });
