@@ -22,6 +22,8 @@ const COMMAND_FIELDS: { key: keyof SpeakerCommands; label: string; def: string }
   { key: "refreshKeywords", label: "刷新曲库", def: "刷新曲库" },
   { key: "randomPlayKeywords", label: "随机播放", def: "随便听听" },
   { key: "continueKeywords", label: "继续播放", def: "继续播放,继续" },
+  { key: "deleteKeywords", label: "删除当前(回收站)", def: "删除当前,删除音乐" },
+  { key: "undoDeleteKeywords", label: "撤销删除", def: "撤销删除,撤销" },
   { key: "interruptWhitelistKeywords", label: "打断白名单(音量类)", def: "音量,声音,大点声,小点声,调大音量,调小音量,静音,取消静音" },
 ];
 

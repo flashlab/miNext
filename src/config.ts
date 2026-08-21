@@ -15,6 +15,8 @@ export interface CommandsConfig {
   randomPlayKeywords: string[];
   continueKeywords: string[];
   interruptWhitelistKeywords: string[];
+  deleteKeywords: string[];
+  undoDeleteKeywords: string[];
 }
 
 export interface AppConfig {
@@ -46,5 +48,8 @@ export async function loadConfig(path = "minext.config.json"): Promise<AppConfig
   const cfg = (await file.json()) as AppConfig;
   if (!cfg.speakers?.length) throw new Error("配置缺少 speakers");
   if (!cfg.musicDirs?.length) throw new Error("配置缺少 musicDirs");
+  // 老配置文件补默认关键词(回收站删除/撤销)
+  cfg.commands.deleteKeywords ??= ["删除当前", "删除音乐"];
+  cfg.commands.undoDeleteKeywords ??= ["撤销删除", "撤销"];
   return cfg;
 }

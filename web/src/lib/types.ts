@@ -9,6 +9,7 @@ export interface Song {
   ext: string;
   duration_sec: number;
   size: number;
+  deleted_at?: number; // >0 = 回收站(标记删除)
 }
 
 export type LoopMode = "off" | "one" | "all" | "random";
@@ -31,6 +32,8 @@ export interface SpeakerCommands {
   refreshKeywords?: string[];
   randomPlayKeywords?: string[];
   continueKeywords?: string[];
+  deleteKeywords?: string[];
+  undoDeleteKeywords?: string[];
   interruptWhitelistKeywords?: string[];
 }
 

@@ -45,6 +45,9 @@ export const api = {
     return req<{ ok: boolean; path: string }>("/api/songs/upload", { method: "POST", body: fd });
   },
   deleteSong: (path: string) => post("/api/songs/delete", { path }),
+  trash: () => req<{ count: number; songs: Song[] }>("/api/trash"),
+  restoreTrash: (paths: string[]) => post<{ ok: boolean; restored: number }>("/api/trash/restore", { paths }),
+  purgeTrash: (paths?: string[]) => post<{ ok: boolean; purged: number }>("/api/trash/purge", paths?.length ? { paths } : {}),
 
   playerState: (id: string) => req<PlayerState>(`/api/player/${id}/state`),
   play: (id: string, body: { paths?: string[]; keyword?: string }) => post(`/api/player/${id}/play`, body),

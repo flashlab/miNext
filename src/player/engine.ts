@@ -256,6 +256,19 @@ export class PlayerEngine {
     });
   }
 
+  /** 语音删除当前曲目后:有下首则跳下首,否则停止(回收站语义,文件仍在磁盘) */
+  async advanceAfterDelete() {
+    await this.withLock(async () => {
+      this.cancelTimer();
+      if (this.cursor + 1 < this.list.length || this.loop === "all") {
+        await sleep(this.cfg.replyInterruptCooldownSec);
+        await this.advance("voice delete next");
+        return;
+      }
+      await this.stop();
+    });
+  }
+
   /** 停止(保留列表) */
   async stop() {
     await this.withLock(async () => {
