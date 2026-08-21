@@ -36,13 +36,22 @@ function SortHead({ label, field, sort, order, onSort }: {
   );
 }
 
-function LibraryDialog({ onChanged }: { onChanged: () => void }) {
+function LibraryDialog({ onChanged, onShowTrash }: { onChanged: () => void; onShowTrash: () => void }) {
   const [open, setOpen] = useState(false);
   const { data, reload } = usePoll<DirsInfo>(() => api.dirs(), 60000);
+  const { data: trashData, reload: reloadTrash } = usePoll(() => api.trash(), 60000);
   const [newDir, setNewDir] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploadDir, setUploadDir] = useState("");
   const [busy, setBusy] = useState(false);
+  const [purgeArm, setPurgeArm] = useState(false);
+  const trashCount = trashData?.count ?? 0;
+
+  useEffect(() => {
+    if (!purgeArm) return;
+    const t = setTimeout(() => setPurgeArm(false), 3000);
+    return () => clearTimeout(t);
+  }, [purgeArm]);
 
   const dirs = data?.dirs ?? [];
   const defaultDir = data?.defaultDir ?? "";
@@ -111,10 +120,30 @@ function LibraryDialog({ onChanged }: { onChanged: () => void }) {
             </Button>
           </div>
           <Separator className="bg-border" />
-          <Button size="sm" variant="outline" className="h-7 border-border bg-transparent text-xs"
-            onClick={() => api.refreshLibrary().then(() => toast.success("索引重建已开始")).catch((e) => toast.error(String(e)))}>
-            立即重建索引
-          </Button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button size="sm" variant="outline" className="h-7 border-border bg-transparent text-xs"
+              onClick={() => api.refreshLibrary().then(() => toast.success("索引重建已开始")).catch((e) => toast.error(String(e)))}>
+              立即重建索引
+            </Button>
+            {trashCount > 0 && (
+              <>
+                <Button size="sm" variant="outline"
+                  className={`h-7 text-xs ${purgeArm ? "border-red-500/60 text-red-500" : "border-border bg-transparent"}`}
+                  onClick={() => {
+                    if (!purgeArm) return setPurgeArm(true);
+                    api.purgeTrash()
+                      .then((r) => { toast.success(`已彻底删除 ${r.purged} 首(含文件)`); setPurgeArm(false); reloadTrash(); onChanged(); })
+                      .catch((e) => toast.error(String(e)));
+                  }}>
+                  {purgeArm ? `确认清空?${trashCount}首` : `清空回收站(${trashCount}首)`}
+                </Button>
+                <Button size="sm" variant="outline" className="h-7 border-border bg-transparent text-xs"
+                  onClick={() => { setOpen(false); onShowTrash(); }}>
+                  显示待删除
+                </Button>
+              </>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>
@@ -130,6 +159,45 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
   const [pageSize, setPageSize] = useState<string>("50");
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // ---- 回收站模式 ----
+  const [trashMode, setTrashMode] = useState(false);
+  const [trashSongs, setTrashSongs] = useState<Song[]>([]);
+  const [purgeSelArm, setPurgeSelArm] = useState(false);
+
+  const enterTrash = async () => {
+    try {
+      const t = await api.trash();
+      setTrashSongs(t.songs);
+      setSelected(new Set());
+      setTrashMode(true);
+    } catch (e) { toast.error(String(e)); }
+  };
+  const exitTrash = () => { setTrashMode(false); setSelected(new Set()); setPurgeSelArm(false); reload(); };
+  const refreshTrash = async () => {
+    const t = await api.trash();
+    setTrashSongs(t.songs);
+    setSelected(new Set());
+    if (!t.songs.length) exitTrash();
+  };
+  const restoreSelected = () => {
+    const paths = [...selected];
+    api.restoreTrash(paths)
+      .then((r) => { toast.success(`已恢复 ${r.restored} 首`); void refreshTrash(); })
+      .catch((e) => toast.error(String(e)));
+  };
+  const purgeSelected = () => {
+    if (!purgeSelArm) return setPurgeSelArm(true);
+    const paths = [...selected];
+    api.purgeTrash(paths)
+      .then((r) => { toast.success(`已彻底删除 ${r.purged} 首(含文件)`); setPurgeSelArm(false); void refreshTrash(); })
+      .catch((e) => toast.error(String(e)));
+  };
+
+  useEffect(() => {
+    if (!purgeSelArm) return;
+    const t = setTimeout(() => setPurgeSelArm(false), 3000);
+    return () => clearTimeout(t);
+  }, [purgeSelArm]);
 
   const limit = pageSize === "all" ? ("all" as const) : parseInt(pageSize);
   const offset = typeof limit === "number" ? page * limit : 0;
@@ -142,14 +210,15 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
   const { data: albumData } = usePoll(() => api.albums(), 60000);
 
   const songs = useMemo(() => data?.songs ?? [], [data]);
+  const shownSongs = trashMode ? trashSongs : songs;
   const total = data?.total ?? 0;
   const totalPages = typeof limit === "number" && limit > 0 ? Math.max(1, Math.ceil(total / limit)) : 1;
 
-  const allChecked = songs.length > 0 && songs.every((s) => selected.has(s.path));
+  const allChecked = shownSongs.length > 0 && shownSongs.every((s) => selected.has(s.path));
   const toggleAll = () => {
     const next = new Set(selected);
-    if (allChecked) songs.forEach((s) => next.delete(s.path));
-    else songs.forEach((s) => next.add(s.path));
+    if (allChecked) shownSongs.forEach((s) => next.delete(s.path));
+    else shownSongs.forEach((s) => next.add(s.path));
     setSelected(next);
   };
   const toggleOne = (path: string) => {
@@ -233,9 +302,9 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
   const batchAppend = (speakerId: string) =>
     api.append(speakerId, paths).then(() => toast.success(`已追加 ${paths.length} 首到列表尾部`)).catch((e) => toast.error(String(e)));
   const batchDelete = () => {
-    if (!confirm(`确认删除选中的 ${paths.length} 个文件?\n服务器文件将被物理删除!`)) return;
+    // 回收站语义:仅标记,可恢复——无需确认弹窗
     Promise.allSettled(paths.map((p) => api.deleteSong(p)))
-      .then(() => { toast.success("已删除"); setSelected(new Set()); reload(); });
+      .then(() => { toast.success(`已标记删除 ${paths.length} 首,可在回收站恢复`); setSelected(new Set()); reload(); });
   };
 
   return (
@@ -282,17 +351,36 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
           )}
         </div>
       )}
-      <div className="flex flex-wrap gap-1.5">
-        <Input value={q} onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && (setSubmitted(q.trim()), setPage(0))}
-          placeholder="搜索歌名 / 歌手 / 专辑 / 文件名,空格分隔组合…"
-          className="h-8 min-w-48 flex-1 border-border bg-transparent text-xs" />
-        <Button size="sm" variant="outline" className="h-8 border-border bg-transparent text-xs"
-          onClick={() => (setSubmitted(q.trim()), setPage(0))}>搜索</Button>
-        <LibraryDialog onChanged={reload} />
-      </div>
+      {trashMode ? (
+        <div className="flex items-center gap-2 rounded border border-amber-500/40 bg-amber-500/5 px-2 py-1.5">
+          <Badge variant="outline" className="border-amber-500/60 text-amber-500">回收站({trashSongs.length}首)</Badge>
+          <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">待删除曲目,文件仍在磁盘;清空/彻底删除才会移除文件</span>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={exitTrash}>退出</Button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          <Input value={q} onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && (setSubmitted(q.trim()), setPage(0))}
+            placeholder="搜索歌名 / 歌手 / 专辑 / 文件名,空格分隔组合…"
+            className="h-8 min-w-48 flex-1 border-border bg-transparent text-xs" />
+          <Button size="sm" variant="outline" className="h-8 border-border bg-transparent text-xs"
+            onClick={() => (setSubmitted(q.trim()), setPage(0))}>搜索</Button>
+          <LibraryDialog onChanged={reload} onShowTrash={() => void enterTrash()} />
+        </div>
+      )}
 
-      {selected.size > 0 && (
+      {selected.size > 0 && trashMode && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-amber-500/40 bg-amber-500/5 px-2 py-1.5">
+          <Badge variant="outline" className="border-amber-500/60 text-amber-500">已选 {selected.size}</Badge>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-foreground" onClick={restoreSelected}>恢复</Button>
+          <Button size="sm" variant="ghost" className={`h-7 px-2 text-xs ${purgeSelArm ? "text-red-500" : "text-red-500/80"}`} onClick={purgeSelected}>
+            {purgeSelArm ? `确认彻底删除?${selected.size}首` : "彻底删除"}
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => setSelected(new Set())}>取消选择</Button>
+        </div>
+      )}
+
+      {selected.size > 0 && !trashMode && (
         <div className="flex flex-wrap items-center gap-2 rounded border border-amber-500/40 bg-amber-500/5 px-2 py-1.5">
           <Badge variant="outline" className="border-amber-500/60 text-amber-500">已选 {selected.size}</Badge>
           <DropdownMenu>
@@ -333,14 +421,14 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
               <th className="w-8 px-2 py-2 text-left">
                 <Checkbox checked={allChecked} onCheckedChange={toggleAll} />
               </th>
-              <th className="px-2 py-2 text-left text-muted-foreground"><SortHead label="标题" field="title" sort={sort} order={order} onSort={onSort} /></th>
-              <th className="px-2 py-2 text-left text-muted-foreground"><SortHead label="歌手" field="artist" sort={sort} order={order} onSort={onSort} /></th>
-              <th className="px-2 py-2 text-left text-muted-foreground"><SortHead label="专辑" field="album" sort={sort} order={order} onSort={onSort} /></th>
-              <th className="w-16 px-2 py-2 text-right text-muted-foreground"><SortHead label="时长" field="duration" sort={sort} order={order} onSort={onSort} /></th>
+              <th className="px-2 py-2 text-left text-muted-foreground">{trashMode ? <span className="text-xs">标题</span> : <SortHead label="标题" field="title" sort={sort} order={order} onSort={onSort} />}</th>
+              <th className="px-2 py-2 text-left text-muted-foreground">{trashMode ? <span className="text-xs">歌手</span> : <SortHead label="歌手" field="artist" sort={sort} order={order} onSort={onSort} />}</th>
+              <th className="px-2 py-2 text-left text-muted-foreground">{trashMode ? <span className="text-xs">专辑</span> : <SortHead label="专辑" field="album" sort={sort} order={order} onSort={onSort} />}</th>
+              <th className="w-16 px-2 py-2 text-right text-muted-foreground">{trashMode ? <span className="text-xs">时长</span> : <SortHead label="时长" field="duration" sort={sort} order={order} onSort={onSort} />}</th>
             </tr>
           </thead>
           <tbody>
-            {songs.map((s) => (
+            {shownSongs.map((s) => (
               <tr key={s.path} className={`border-b border-border/60 last:border-0 hover:bg-accent/50 ${selected.has(s.path) ? "bg-amber-500/5" : ""}`}>
                 <td className="px-2 py-1.5"><Checkbox checked={selected.has(s.path)} onCheckedChange={() => toggleOne(s.path)} /></td>
                 <td className="max-w-52 truncate px-2 py-1.5 text-xs text-foreground">{s.title || s.filename}</td>
@@ -349,15 +437,16 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
                 <td className="px-2 py-1.5 text-right font-mono text-xs text-muted-foreground">{fmtDuration(s.duration_sec)}</td>
               </tr>
             ))}
-            {!songs.length && (
-              <tr><td colSpan={5} className="px-2 py-6 text-center text-xs text-muted-foreground">无结果</td></tr>
+            {!shownSongs.length && (
+              <tr><td colSpan={5} className="px-2 py-6 text-center text-xs text-muted-foreground">{trashMode ? "回收站为空" : "无结果"}</td></tr>
             )}
           </tbody>
         </table>
       </div>
 
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>共 {total} 首{typeof limit === "number" ? ` · 第 ${page + 1}/${totalPages} 页` : ""}</span>
+      {!trashMode && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>共 {total} 首{typeof limit === "number" ? ` · 第 ${page + 1}/${totalPages} 页` : ""}</span>
         <div className="flex items-center gap-2">
           <Select value={pageSize} onValueChange={(v) => { if (!v) return; setPageSize(v); setPage(0); }}>
             <SelectTrigger className="h-7 w-24 border-border bg-transparent text-xs">
@@ -381,10 +470,11 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
             </div>
           )}
         </div>
-      </div>
+        </div>
+      )}
 
       {/* 专辑视图保留为快速入口 */}
-      {albumData && albumData.albums.length > 0 && (
+      {!trashMode && albumData && albumData.albums.length > 0 && (
         <details className="text-xs">
           <summary className="cursor-pointer text-muted-foreground hover:text-foreground">按专辑浏览({albumData.albums.length})</summary>
           <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">

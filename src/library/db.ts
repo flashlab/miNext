@@ -16,6 +16,7 @@ export interface SongRow {
   size: number;
   mtime_ns: number;
   updated_at: number;
+  deleted_at: number; // 0=正常;>0=标记删除(回收站)时间戳,文件仍在磁盘
 }
 
 export interface SpeakerRow {
@@ -78,6 +79,10 @@ export class LibraryDb {
     if (!cols.has("hidden")) this.db.run("ALTER TABLE speakers ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
     if (!cols.has("token")) this.db.run("ALTER TABLE speakers ADD COLUMN token TEXT NOT NULL DEFAULT ''");
     if (!cols.has("last_ip")) this.db.run("ALTER TABLE speakers ADD COLUMN last_ip TEXT NOT NULL DEFAULT ''");
+    const songCols = new Set(
+      (this.db.query("PRAGMA table_info(songs)").all() as { name: string }[]).map((c) => c.name),
+    );
+    if (!songCols.has("deleted_at")) this.db.run("ALTER TABLE songs ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0");
   }
 
   // ---- settings ----
@@ -118,7 +123,7 @@ export class LibraryDb {
   }
 
   // ---- songs ----
-  upsertSong(s: Omit<SongRow, "id" | "updated_at">) {
+  upsertSong(s: Omit<SongRow, "id" | "updated_at" | "deleted_at">) {
     this.db.run(
       `INSERT INTO songs (path,title,artist,album,filename,dir,ext,duration_sec,size,mtime_ns,updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?)
@@ -155,7 +160,7 @@ export class LibraryDb {
   }
 
   count(): number {
-    return (this.db.query("SELECT COUNT(*) AS n FROM songs").get() as { n: number }).n;
+    return (this.db.query("SELECT COUNT(*) AS n FROM songs WHERE deleted_at = 0").get() as { n: number }).n;
   }
 
   allPathsMtime(): Map<string, number> {
@@ -166,7 +171,12 @@ export class LibraryDb {
   getByPaths(paths: string[]): SongRow[] {
     if (!paths.length) return [];
     const ph = paths.map(() => "?").join(",");
-    return this.db.query(`SELECT * FROM songs WHERE path IN (${ph})`).all(...paths) as SongRow[];
+    return this.db.query(`SELECT * FROM songs WHERE deleted_at = 0 AND path IN (${ph})`).all(...paths) as SongRow[];
+  }
+
+  /** 含回收站条目的单路径查询(撤销校验用) */
+  getByPathAny(path: string): SongRow | null {
+    return (this.db.query("SELECT * FROM songs WHERE path = ?").get(path) as SongRow | null) ?? null;
   }
 
   /** 组合搜索 + 排序 + 分页。terms 为空=全部。返回过滤后总数。 */
@@ -178,9 +188,11 @@ export class LibraryDb {
     offset?: number;
   }): { songs: SongRow[]; total: number } {
     const terms = opts.terms.filter(Boolean);
-    const where = terms.length
-      ? "WHERE " + terms.map(() => "(lower(title) LIKE ? OR lower(artist) LIKE ? OR lower(album) LIKE ? OR lower(filename) LIKE ?)").join(" AND ")
-      : "";
+    const where =
+      "WHERE deleted_at = 0" +
+      (terms.length
+        ? " AND " + terms.map(() => "(lower(title) LIKE ? OR lower(artist) LIKE ? OR lower(album) LIKE ? OR lower(filename) LIKE ?)").join(" AND ")
+        : "");
     const params = terms.flatMap((t) => {
       const like = `%${t.toLowerCase()}%`;
       return [like, like, like, like];
@@ -202,7 +214,7 @@ export class LibraryDb {
   }
 
   searchConstrained(opts: { artist?: string; album?: string; title?: string; limit?: number }): SongRow[] {
-    const conds: string[] = [];
+    const conds: string[] = ["deleted_at = 0"];
     const params: string[] = [];
     if (opts.artist) { conds.push("lower(artist) LIKE ?"); params.push(`%${opts.artist.toLowerCase()}%`); }
     if (opts.album) { conds.push("lower(album) LIKE ?"); params.push(`%${opts.album.toLowerCase()}%`); }
@@ -217,11 +229,51 @@ export class LibraryDb {
 
   albums(): { album: string; artist: string; count: number }[] {
     return this.db.query(
-      `SELECT album, artist, COUNT(*) AS count FROM songs WHERE album != '' GROUP BY album, artist ORDER BY count DESC`,
+      `SELECT album, artist, COUNT(*) AS count FROM songs WHERE album != '' AND deleted_at = 0 GROUP BY album, artist ORDER BY count DESC`,
     ).all() as { album: string; artist: string; count: number }[];
   }
 
   randomPick(limit: number): SongRow[] {
-    return this.db.query("SELECT * FROM songs ORDER BY RANDOM() LIMIT ?").all(limit) as SongRow[];
+    return this.db.query("SELECT * FROM songs WHERE deleted_at = 0 ORDER BY RANDOM() LIMIT ?").all(limit) as SongRow[];
+  }
+
+  // ---- 回收站(标记删除) ----
+  /** 标记删除;返回行(含已是回收站状态的),不存在返回 null */
+  markDeleted(path: string): SongRow | null {
+    const row = this.getByPathAny(path);
+    if (!row) return null;
+    if (!row.deleted_at) this.db.run("UPDATE songs SET deleted_at = ? WHERE path = ?", [Date.now(), path]);
+    return { ...row, deleted_at: row.deleted_at || Date.now() };
+  }
+
+  /** 恢复(清标记);返回实际恢复条数 */
+  restore(paths: string[]): number {
+    if (!paths.length) return 0;
+    const ph = paths.map(() => "?").join(",");
+    return this.db.run(`UPDATE songs SET deleted_at = 0 WHERE deleted_at != 0 AND path IN (${ph})`, paths).changes;
+  }
+
+  /** 下载落盘路径命中墓碑时复活(重新下载=明确想要) */
+  resurrectIfTrashed(path: string) {
+    this.db.run("UPDATE songs SET deleted_at = 0 WHERE path = ? AND deleted_at != 0", [path]);
+  }
+
+  trashList(): SongRow[] {
+    return this.db.query("SELECT * FROM songs WHERE deleted_at != 0 ORDER BY deleted_at DESC").all() as SongRow[];
+  }
+
+  trashCount(): number {
+    return (this.db.query("SELECT COUNT(*) AS n FROM songs WHERE deleted_at != 0").get() as { n: number }).n;
+  }
+
+  /** 物理删除回收站条目(调用方负责 unlink 文件);返回被删行 */
+  purgeTrashed(paths?: string[]): SongRow[] {
+    const rows = paths?.length
+      ? (this.db.query(`SELECT * FROM songs WHERE deleted_at != 0 AND path IN (${paths.map(() => "?").join(",")})`).all(...paths) as SongRow[])
+      : this.trashList();
+    if (!rows.length) return [];
+    const ph = rows.map(() => "?").join(",");
+    this.db.run(`DELETE FROM songs WHERE path IN (${ph})`, rows.map((r) => r.path));
+    return rows;
   }
 }

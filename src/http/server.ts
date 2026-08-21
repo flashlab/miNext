@@ -150,7 +150,7 @@ export function createHttpServer(deps: HttpDeps) {
         if (!body.url && !body.id) return err("缺少 id 或链接");
         const job = startDownload(
           { source: body.source ?? "url", id: body.id, url: body.url, quality: body.quality, dir: body.dir, meta: body.meta },
-          plugins, indexer, (d) => inLibrary(d),
+          plugins, indexer, (d) => inLibrary(d), db,
         );
         return json({ ok: true, job });
       }
@@ -349,9 +349,10 @@ export function createHttpServer(deps: HttpDeps) {
         const { path } = (await req.json()) as { path?: string };
         if (!path) return err("缺少 path");
         if (!inLibrary(path)) return err("路径不在曲库范围内", 403);
-        await unlink(path);
-        db.removeByPath(path);
-        return json({ ok: true });
+        // 回收站语义:仅标记删除,文件保留;物理删走 /api/trash/purge
+        const row = db.markDeleted(path);
+        if (!row) return err("曲目不存在", 404);
+        return json({ ok: true, note: "已标记删除,可在回收站恢复" });
       }
       if (parts[1] === "rename" && method === "POST") {
         const { path, newName } = (await req.json()) as { path?: string; newName?: string };
@@ -364,6 +365,30 @@ export function createHttpServer(deps: HttpDeps) {
         return json({ ok: true, path: newPath });
       }
       return err("unknown songs action", 404);
+    }
+
+    // ===== /api/trash(回收站) =====
+    if (parts[0] === "trash") {
+      if (parts.length === 1 && method === "GET") {
+        return json({ count: db.trashCount(), songs: db.trashList() });
+      }
+      if (parts[1] === "restore" && method === "POST") {
+        const { paths } = (await req.json()) as { paths?: string[] };
+        if (!paths?.length) return err("缺少 paths");
+        return json({ ok: true, restored: db.restore(paths) });
+      }
+      if (parts[1] === "purge" && method === "POST") {
+        const { paths } = (await req.json().catch(() => ({}))) as { paths?: string[] };
+        const rows = db.purgeTrashed(paths?.length ? paths : undefined);
+        // 物理删文件(含 .lrc sidecar),失败仅记日志
+        for (const r of rows) {
+          for (const p of [r.path, r.path.replace(/\.[^.]+$/, ".lrc")]) {
+            try { await unlink(p); } catch { /* 文件不存在等,忽略 */ }
+          }
+        }
+        return json({ ok: true, purged: rows.length });
+      }
+      return err("unknown trash action", 404);
     }
 
     if (parts[0] === "albums" && method === "GET") {

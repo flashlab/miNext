@@ -42,6 +42,8 @@ export class VoicePipeline {
     const isRefresh = isExactCommand(text, cmds.refreshKeywords);
     const isRandom = isExactCommand(text, cmds.randomPlayKeywords);
     const isContinue = isExactCommand(text, cmds.continueKeywords);
+    const isDelete = isExactCommand(text, cmds.deleteKeywords);
+    const isUndo = isExactCommand(text, cmds.undoDeleteKeywords);
     const keyword = extractPlayKeyword(text, cmds.playKeywords);
     const isNewPlay = Boolean(keyword) || isRandom;
 
@@ -81,10 +83,50 @@ export class VoicePipeline {
       if (this.link.playing !== "Playing") await this.engine.toggle();
       return;
     }
+    if (isDelete) {
+      await this.deleteCurrent();
+      return;
+    }
+    if (isUndo) {
+      await this.undoDelete();
+      return;
+    }
     if (keyword) {
       this.engine.armReplyInterrupt(`voice play: ${keyword}`);
       await this.playByKeyword(keyword);
     }
+  }
+
+  /** 语音删除当前曲目:标记回收站(文件保留) → 记录撤销槽 → 跳下首/停止 */
+  async deleteCurrent() {
+    const cur = this.engine.current;
+    if (!cur) {
+      await this.engine.speak("当前没有播放");
+      return;
+    }
+    this.engine.armReplyInterrupt("voice delete");
+    this.db.markDeleted(cur.path);
+    this.db.setSettingJSON("voice.lastTrash", { path: cur.path, title: cur.title, artist: cur.artist, at: Date.now() });
+    await this.engine.speak(`已删除:${cur.title || cur.filename}`);
+    await this.engine.advanceAfterDelete();
+  }
+
+  /** 撤销上次语音删除(仅清标记,不回播放列表);记录已物理删除/已恢复则不可撤销 */
+  async undoDelete() {
+    const slot = this.db.getSettingJSON<{ path: string; title: string }>("voice.lastTrash");
+    if (!slot?.path) {
+      await this.engine.speak("没有可撤销的删除");
+      return;
+    }
+    const row = this.db.getByPathAny(slot.path);
+    if (!row || !row.deleted_at) {
+      this.db.setSetting("voice.lastTrash", "");
+      await this.engine.speak("无法撤销");
+      return;
+    }
+    this.db.restore([slot.path]);
+    this.db.setSetting("voice.lastTrash", "");
+    await this.engine.speak("已撤销删除");
   }
 
   async playByKeyword(keyword: string) {

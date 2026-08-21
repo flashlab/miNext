@@ -52,6 +52,7 @@ export function startDownload(
   registry: PluginRegistry,
   indexer: Indexer,
   dirsContain: (dir: string) => boolean,
+  db: { resurrectIfTrashed(path: string): void },
 ): DownloadJob {
   const label = req.meta?.artist
     ? `${req.meta.artist} - ${req.meta.title ?? req.id ?? req.url}`
@@ -79,6 +80,7 @@ export function startDownload(
         await writeFile(savePath.replace(/\.[^.]+$/, ".lrc"), resolved.lrc, "utf8").catch(() => {});
       }
       indexer.refresh().catch(() => {}); // 全量刷新(mtime 增量,秒级)
+      db.resurrectIfTrashed(savePath); // 下载命中墓碑→复活(重新下载=明确想要)
       job.status = "done";
       job.savedPath = savePath;
     } catch (e) {
