@@ -1,4 +1,4 @@
-import type { AlbumInfo, DirsInfo, DlJob, DlResult, LoopMode, PlayerState, PluginView, Song, Speaker, SpeakerCommands } from "./types";
+import type { AlbumInfo, DirsInfo, DlJob, DlResult, GlobalSettings, LoopMode, PlayerState, PluginView, Song, Speaker, SpeakerCommands } from "./types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, {
@@ -48,6 +48,9 @@ export const api = {
   trash: () => req<{ count: number; songs: Song[] }>("/api/trash"),
   restoreTrash: (paths: string[]) => post<{ ok: boolean; restored: number }>("/api/trash/restore", { paths }),
   purgeTrash: (paths?: string[]) => post<{ ok: boolean; purged: number }>("/api/trash/purge", paths?.length ? { paths } : {}),
+  globalSettings: () => req<GlobalSettings>("/api/settings/global"),
+  saveGlobalSettings: (body: Partial<GlobalSettings>) =>
+    req<GlobalSettings & { ok: boolean }>("/api/settings/global", { method: "PUT", body: JSON.stringify(body) }),
 
   playerState: (id: string) => req<PlayerState>(`/api/player/${id}/state`),
   play: (id: string, body: { paths?: string[]; keyword?: string }) => post(`/api/player/${id}/play`, body),

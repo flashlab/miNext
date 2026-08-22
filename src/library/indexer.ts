@@ -78,6 +78,10 @@ export class Indexer {
     private extensions: string[],
   ) {}
 
+  setExtensions(exts: string[]) {
+    this.extensions = exts;
+  }
+
   get isRefreshing() {
     return this.refreshing;
   }

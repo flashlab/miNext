@@ -12,6 +12,12 @@ export interface Song {
   deleted_at?: number; // >0 = 回收站(标记删除)
 }
 
+export interface GlobalSettings {
+  commands: SpeakerCommands;
+  audioExtensions: string[]; // [".mp3", ...]
+  search: { maxResults: number; artistSeparators: string[]; albumSeparators: string[] };
+}
+
 export type LoopMode = "off" | "one" | "all" | "random";
 export type PlayingStatus = "Playing" | "Paused" | "Idle";
 

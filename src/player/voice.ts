@@ -20,6 +20,10 @@ export class VoicePipeline {
     this.commands = cmds;
   }
 
+  setSem(sem: SearchSemantics) {
+    this.sem = sem;
+  }
+
   attach() {
     this.link.setHandlers({
       onInstructionText: (text) => void this.dispatch(text),

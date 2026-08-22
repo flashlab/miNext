@@ -81,5 +81,5 @@ export function searchByVoiceKeyword(db: LibraryDb, keyword: string, sem: Search
       ).slice(0, sem.maxResults);
     }
   }
-  return shuffle(db.search({ terms: [kw], limit: 500 }).songs).slice(0, sem.maxResults);
+  return shuffle(db.search({ q: kw, limit: 500 }).songs).slice(0, sem.maxResults);
 }

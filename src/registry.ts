@@ -20,8 +20,8 @@ export interface RegistryDeps {
   db: LibraryDb;
   indexer: Indexer;
   playerCfg: PlayerConfig;
-  defaultCommands: CommandsConfig;
-  searchSem: SearchSemantics;
+  getCommands: () => CommandsConfig;
+  getSearchSem: () => SearchSemantics;
   maxResults: number;
   fileUrl: (path: string) => string;
 }
@@ -45,15 +45,12 @@ export class SpeakerRegistry {
     const existing = this.runtimes.get(row.id);
     if (existing) this.unbind(row.id);
 
-    const commands: CommandsConfig = {
-      ...this.deps.defaultCommands,
-      ...(JSON.parse(row.commands || "{}") as Partial<CommandsConfig>),
-    };
+    const commands = deps.getCommands();
     const link = new SpeakerLink(row.id, row.name, row.ws_port);
     const engine = new PlayerEngine(link, this.deps.playerCfg, this.deps.fileUrl, (m) =>
       console.log(`[${row.id}] ${m}`),
     );
-    const voice = new VoicePipeline(link, engine, this.deps.db, this.deps.indexer, commands, this.deps.searchSem);
+    const voice = new VoicePipeline(link, engine, this.deps.db, this.deps.indexer, commands, this.deps.getSearchSem());
     voice.attach();
 
     const server = Bun.serve({
@@ -97,11 +94,15 @@ export class SpeakerRegistry {
     if (rt.row.ws_port !== row.ws_port) return this.bind(row);
     rt.row = row;
     rt.link.name = row.name;
-    const commands: CommandsConfig = {
-      ...this.deps.defaultCommands,
-      ...(JSON.parse(row.commands || "{}") as Partial<CommandsConfig>),
-    };
-    rt.voice.setCommands(commands);
+    rt.voice.setCommands(this.deps.getCommands());
+  }
+
+  /** 全局命令/搜索语义热应用(设置页保存时调用) */
+  applyCommands(cmds: CommandsConfig) {
+    for (const rt of this.runtimes.values()) rt.voice.setCommands(cmds);
+  }
+  applySearchSem(sem: SearchSemantics) {
+    for (const rt of this.runtimes.values()) rt.voice.setSem(sem);
   }
 
   remove(id: string) {
