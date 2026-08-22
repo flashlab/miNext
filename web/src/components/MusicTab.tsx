@@ -361,7 +361,7 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
         <div className="flex flex-wrap gap-1.5">
           <Input value={q} onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && (setSubmitted(q.trim()), setPage(0))}
-            placeholder="搜索歌名 / 歌手 / 专辑 / 文件名,空格分隔组合…"
+            placeholder="搜索歌名/歌手/专辑/文件名;支持 [ti][ar][al][fn] 字段、and/or、* 通配…"
             className="h-8 min-w-48 flex-1 border-border bg-transparent text-xs" />
           <Button size="sm" variant="outline" className="h-8 border-border bg-transparent text-xs"
             onClick={() => (setSubmitted(q.trim()), setPage(0))}>搜索</Button>

@@ -1,7 +1,8 @@
 // 主 HTTP server v2:REST API + 音乐文件(Range) + SPA 静态托管
-import type { AppConfig } from "../config";
+import type { AppConfig, CommandsConfig } from "../config";
 import type { LibraryDb, SpeakerRow } from "../library/db";
 import type { Indexer } from "../library/indexer";
+import type { SearchSemantics } from "../library/search";
 import type { SpeakerRegistry } from "../registry";
 import type { PluginRegistry } from "../plugins/registry";
 import { listJobs, startDownload } from "../jobs";
@@ -26,6 +27,9 @@ export interface HttpDeps {
   plugins: PluginRegistry;
   getDirs: () => string[];
   getDefaultDir: () => string;
+  getCommands: () => CommandsConfig;
+  getSearchSem: () => SearchSemantics;
+  getExtensions: () => string[];
   webDist: string;
 }
 
@@ -76,7 +80,7 @@ async function serveFile(path: string, req: Request): Promise<Response> {
 }
 
 export function createHttpServer(deps: HttpDeps) {
-  const { cfg, db, indexer, registry, plugins, getDirs, getDefaultDir, webDist } = deps;
+  const { cfg, db, indexer, registry, plugins, getDirs, getDefaultDir, getCommands, getSearchSem, getExtensions, webDist } = deps;
 
   const inLibrary = (p: string) => getDirs().some((d) => {
     const np = normalize(p);
@@ -321,13 +325,12 @@ export function createHttpServer(deps: HttpDeps) {
     if (parts[0] === "songs") {
       if (parts.length === 1 && method === "GET") {
         const q = (url.searchParams.get("q") ?? "").trim();
-        const terms = q ? q.split(/\s+/).filter(Boolean) : [];
         const limitRaw = url.searchParams.get("limit") ?? "50";
         const limit = limitRaw === "all" ? 0 : Math.min(parseInt(limitRaw) || 50, 100000);
         const offset = parseInt(url.searchParams.get("offset") ?? "0");
         const sort = url.searchParams.get("sort") ?? undefined;
         const order = (url.searchParams.get("order") ?? "asc") as "asc" | "desc";
-        return json(db.search({ terms, limit, offset, sort, order }));
+        return json(db.search({ q, limit, offset, sort, order }));
       }
       if (parts[1] === "upload" && method === "POST") {
         const form = await req.formData();
@@ -336,7 +339,7 @@ export function createHttpServer(deps: HttpDeps) {
         if (!inLibrary(targetDir)) return err("目标目录不在曲库范围内", 403);
         if (!(file instanceof File)) return err("缺少 file 字段");
         const name = basename(file.name);
-        if (!cfg.audioExtensions.includes(extname(name).toLowerCase())) {
+        if (!getExtensions().includes(extname(name).toLowerCase())) {
           return err(`不支持的格式: ${extname(name)}`);
         }
         await mkdir(targetDir, { recursive: true });
@@ -393,6 +396,51 @@ export function createHttpServer(deps: HttpDeps) {
 
     if (parts[0] === "albums" && method === "GET") {
       return json({ albums: db.albums() });
+    }
+
+    // ===== /api/settings/global(全局设置:关键词/后缀/搜索语义) =====
+    if (parts[0] === "settings" && parts[1] === "global") {
+      if (method === "GET") {
+        return json({ commands: getCommands(), audioExtensions: getExtensions(), search: getSearchSem() });
+      }
+      if (method === "PUT") {
+        const body = (await req.json()) as {
+          commands?: Partial<CommandsConfig>;
+          audioExtensions?: string[];
+          search?: Partial<SearchSemantics>;
+        };
+        const ALLOWED_EXT = [".mp3", ".aac", ".ogg", ".m4a", ".flac", ".ape", ".wav"];
+        if (body.commands !== undefined) {
+          const cmds: Record<string, string[]> = {};
+          for (const [k, v] of Object.entries(body.commands)) {
+            if (!Array.isArray(v) || !v.every((x) => typeof x === "string" && x.trim())) return err(`关键词组 ${k} 非法`);
+            cmds[k] = v.map((x) => x.trim());
+          }
+          db.setSettingJSON("globalCommands", { ...getCommands(), ...cmds });
+          registry.applyCommands(getCommands());
+        }
+        if (body.audioExtensions !== undefined) {
+          const norm = body.audioExtensions.map((e) => (e.startsWith(".") ? e.toLowerCase() : `.${e.toLowerCase()}`));
+          if (!norm.length || norm.some((e) => !ALLOWED_EXT.includes(e))) return err(`后缀须为: ${ALLOWED_EXT.join(" ")}`);
+          const changed = JSON.stringify(norm) !== JSON.stringify(getExtensions());
+          db.setSettingJSON("audioExtensions", norm);
+          if (changed) {
+            indexer.setExtensions(norm);
+            void indexer.refresh().catch(() => {}); // 新纳入格式需重建入库
+          }
+        }
+        if (body.search !== undefined) {
+          const s = body.search;
+          if (s.maxResults !== undefined && (!Number.isInteger(s.maxResults) || s.maxResults < 1 || s.maxResults > 500)) return err("maxResults 须为 1-500 整数");
+          for (const k of ["artistSeparators", "albumSeparators"] as const) {
+            if (s[k] !== undefined && (!Array.isArray(s[k]) || !s[k]!.every((x) => typeof x === "string" && x.trim()))) return err(`${k} 非法`);
+          }
+          db.setSettingJSON("searchSem", { ...getSearchSem(), ...s });
+          registry.applySearchSem(getSearchSem());
+        }
+        return json({ ok: true, commands: getCommands(), audioExtensions: getExtensions(), search: getSearchSem() });
+      }
+      return err("method?", 405);
     }
 
     // ===== /api/player/:id/:action =====

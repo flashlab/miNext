@@ -2,6 +2,8 @@
 import { Database } from "bun:sqlite";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
+import { normText } from "./t2s";
+import { compileQuery } from "./query";
 
 export interface SongRow {
   id: number;
@@ -17,6 +19,11 @@ export interface SongRow {
   mtime_ns: number;
   updated_at: number;
   deleted_at: number; // 0=正常;>0=标记删除(回收站)时间戳,文件仍在磁盘
+  // 搜索影子列:繁→简 + 小写;显示仍用原列
+  norm_title: string;
+  norm_artist: string;
+  norm_album: string;
+  norm_filename: string;
 }
 
 export interface SpeakerRow {
@@ -83,6 +90,20 @@ export class LibraryDb {
       (this.db.query("PRAGMA table_info(songs)").all() as { name: string }[]).map((c) => c.name),
     );
     if (!songCols.has("deleted_at")) this.db.run("ALTER TABLE songs ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0");
+    for (const c of ["norm_title", "norm_artist", "norm_album", "norm_filename"]) {
+      if (!songCols.has(c)) this.db.run(`ALTER TABLE songs ADD COLUMN ${c} TEXT NOT NULL DEFAULT ''`);
+    }
+    // 影子列回填(新增列后一次性)
+    const stale = this.db.query("SELECT id, title, artist, album, filename FROM songs WHERE norm_filename = ''").all() as { id: number; title: string; artist: string; album: string; filename: string }[];
+    if (stale.length) {
+      const stmt = this.db.prepare("UPDATE songs SET norm_title=?, norm_artist=?, norm_album=?, norm_filename=? WHERE id=?");
+      const tx = this.db.transaction(() => {
+        for (const r of stale) stmt.run(normText(r.title), normText(r.artist), normText(r.album), normText(r.filename), r.id);
+      });
+      tx();
+      console.log(`影子列回填完成: ${stale.length} 首`);
+    }
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_songs_norm_title ON songs(norm_title)");
   }
 
   // ---- settings ----
@@ -123,16 +144,19 @@ export class LibraryDb {
   }
 
   // ---- songs ----
-  upsertSong(s: Omit<SongRow, "id" | "updated_at" | "deleted_at">) {
+  upsertSong(s: Omit<SongRow, "id" | "updated_at" | "deleted_at" | "norm_title" | "norm_artist" | "norm_album" | "norm_filename">) {
     this.db.run(
-      `INSERT INTO songs (path,title,artist,album,filename,dir,ext,duration_sec,size,mtime_ns,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO songs (path,title,artist,album,filename,dir,ext,duration_sec,size,mtime_ns,updated_at,norm_title,norm_artist,norm_album,norm_filename)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(path) DO UPDATE SET
          title=excluded.title, artist=excluded.artist, album=excluded.album,
          filename=excluded.filename, dir=excluded.dir, ext=excluded.ext,
          duration_sec=excluded.duration_sec, size=excluded.size,
-         mtime_ns=excluded.mtime_ns, updated_at=excluded.updated_at`,
-      [s.path, s.title, s.artist, s.album, s.filename, s.dir, s.ext, s.duration_sec, s.size, s.mtime_ns, Date.now()],
+         mtime_ns=excluded.mtime_ns, updated_at=excluded.updated_at,
+         norm_title=excluded.norm_title, norm_artist=excluded.norm_artist,
+         norm_album=excluded.norm_album, norm_filename=excluded.norm_filename`,
+      [s.path, s.title, s.artist, s.album, s.filename, s.dir, s.ext, s.duration_sec, s.size, s.mtime_ns, Date.now(),
+       normText(s.title), normText(s.artist), normText(s.album), normText(s.filename)],
     );
   }
 
@@ -154,8 +178,8 @@ export class LibraryDb {
 
   renamePath(oldPath: string, newPath: string, filename: string, dir: string) {
     this.db.run(
-      "UPDATE songs SET path=?, filename=?, dir=?, updated_at=? WHERE path=?",
-      [newPath, filename, dir, Date.now(), oldPath],
+      "UPDATE songs SET path=?, filename=?, dir=?, updated_at=?, norm_filename=? WHERE path=?",
+      [newPath, filename, dir, Date.now(), normText(filename), oldPath],
     );
   }
 
@@ -179,24 +203,17 @@ export class LibraryDb {
     return (this.db.query("SELECT * FROM songs WHERE path = ?").get(path) as SongRow | null) ?? null;
   }
 
-  /** 组合搜索 + 排序 + 分页。terms 为空=全部。返回过滤后总数。 */
+  /** 字段语法搜索 + 排序 + 分页。q 为空=全部(仅排除回收站)。返回过滤后总数。 */
   search(opts: {
-    terms: string[];
+    q: string;
     sort?: string;
     order?: "asc" | "desc";
     limit?: number;
     offset?: number;
   }): { songs: SongRow[]; total: number } {
-    const terms = opts.terms.filter(Boolean);
-    const where =
-      "WHERE deleted_at = 0" +
-      (terms.length
-        ? " AND " + terms.map(() => "(lower(title) LIKE ? OR lower(artist) LIKE ? OR lower(album) LIKE ? OR lower(filename) LIKE ?)").join(" AND ")
-        : "");
-    const params = terms.flatMap((t) => {
-      const like = `%${t.toLowerCase()}%`;
-      return [like, like, like, like];
-    });
+    const compiled = compileQuery(opts.q);
+    const where = "WHERE deleted_at = 0" + (compiled ? ` AND ${compiled.where}` : "");
+    const params = compiled?.params ?? [];
     const total = (this.db.query(`SELECT COUNT(*) AS n FROM songs ${where}`).get(...params) as { n: number }).n;
 
     const sortCol = SORTABLE[opts.sort ?? ""] ?? "artist COLLATE NOCASE, album COLLATE NOCASE, title COLLATE NOCASE";
@@ -216,13 +233,13 @@ export class LibraryDb {
   searchConstrained(opts: { artist?: string; album?: string; title?: string; limit?: number }): SongRow[] {
     const conds: string[] = ["deleted_at = 0"];
     const params: string[] = [];
-    if (opts.artist) { conds.push("lower(artist) LIKE ?"); params.push(`%${opts.artist.toLowerCase()}%`); }
-    if (opts.album) { conds.push("lower(album) LIKE ?"); params.push(`%${opts.album.toLowerCase()}%`); }
+    if (opts.artist) { conds.push("instr(norm_artist, ?) > 0"); params.push(normText(opts.artist)); }
+    if (opts.album) { conds.push("instr(norm_album, ?) > 0"); params.push(normText(opts.album)); }
     if (opts.title) {
-      conds.push("(lower(title) LIKE ? OR lower(filename) LIKE ?)");
-      params.push(`%${opts.title.toLowerCase()}%`, `%${opts.title.toLowerCase()}%`);
+      conds.push("(instr(norm_title, ?) > 0 OR instr(norm_filename, ?) > 0)");
+      params.push(normText(opts.title), normText(opts.title));
     }
-    if (!conds.length) return [];
+    if (conds.length < 2) return [];
     return this.db.query(`SELECT * FROM songs WHERE ${conds.join(" AND ")} LIMIT ?`)
       .all(...params, opts.limit ?? 100) as SongRow[];
   }
