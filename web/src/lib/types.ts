@@ -9,6 +9,7 @@ export interface Song {
   ext: string;
   duration_sec: number;
   size: number;
+  ctime_ns?: number; // 文件创建时间(birthtime,回退 mtime)
   deleted_at?: number; // >0 = 回收站(标记删除)
 }
 

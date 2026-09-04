@@ -94,9 +94,11 @@ export class PlayerEngine {
   }
 
   onSpeakEvent() {
-    if (!this.isReplyInterruptArmed()) return;
+    const armed = this.isReplyInterruptArmed();
     const now = Date.now();
-    if (now - this.replyInterruptLastStopAt < this.cfg.replyInterruptCooldownSec * 1000) return;
+    const cooling = now - this.replyInterruptLastStopAt < this.cfg.replyInterruptCooldownSec * 1000;
+    this.log(`speak event: armed=${armed} cooling=${cooling}`);
+    if (!armed || cooling) return;
     this.replyInterruptLastStopAt = now;
     this.link.pausePlayback().catch(() => {});
   }
@@ -279,7 +281,8 @@ export class PlayerEngine {
   }
 
   async speak(text: string) {
-    this.replyInterruptArmed = false;
+    // 注意:不要在此 disarm——武装窗口须覆盖自家 TTS 全程,直到 startSong(音乐起播)才撤防,
+    // 否则小爱的默认答复(Speak 事件通常在 ASR 后 0.5–2s 到达)永远落在窗口外。
     await this.link.speakText(text).catch((e) => this.log(`TTS 失败: ${e}`));
   }
 

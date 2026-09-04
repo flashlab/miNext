@@ -9,6 +9,7 @@ import { listJobs, startDownload } from "../jobs";
 import type { LoopMode } from "../player/engine";
 import { rename, unlink, mkdir, rmdir } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { basename, extname, join, normalize } from "node:path";
 
 const MIME: Record<string, string> = {
@@ -358,14 +359,54 @@ export function createHttpServer(deps: HttpDeps) {
         return json({ ok: true, note: "已标记删除,可在回收站恢复" });
       }
       if (parts[1] === "rename" && method === "POST") {
-        const { path, newName } = (await req.json()) as { path?: string; newName?: string };
-        if (!path || !newName) return err("缺少 path/newName");
-        if (!inLibrary(path)) return err("路径不在曲库范围内", 403);
-        const clean = basename(newName);
-        const newPath = join(normalize(path).split("/").slice(0, -1).join("/"), clean);
-        await rename(path, newPath);
-        db.renamePath(path, newPath, clean, newPath.split("/").slice(0, -1).join("/"));
-        return json({ ok: true, path: newPath });
+        // 批量改名/移动:以默认曲库目录为基准,模式串按最后一个 "/" 切分为 子目录/文件名前缀
+        //   "new/" → 移到 defaultDir/new/;"new/abc-" → 移动且加前缀;"abc-" → 仅加前缀
+        const { paths, pattern } = (await req.json()) as { paths?: string[]; pattern?: string };
+        if (!Array.isArray(paths) || !paths.length) return err("缺少 paths");
+        if (typeof pattern !== "string") return err("缺少 pattern");
+        const def = normalize(getDefaultDir()).replace(/\/+$/, "");
+        if (!def) return err("未设置默认曲库目录");
+
+        const s = pattern.trim().replace(/^\/+/, "");
+        if (!s) return err("模式为空或无操作");
+        let dirPart = "", prefix = "";
+        if (s.endsWith("/")) {
+          dirPart = s.replace(/\/+$/, "");
+        } else {
+          const i = s.lastIndexOf("/");
+          if (i >= 0) { dirPart = s.slice(0, i); prefix = s.slice(i + 1); }
+          else prefix = s;
+        }
+        if (!dirPart && !prefix) return err("无操作");
+        if (prefix === "." || prefix === "..") return err("非法前缀");
+        const targetDir = dirPart ? normalize(join(def, dirPart)) : def;
+        if (targetDir !== def && !targetDir.startsWith(def + "/")) return err("目标目录越出默认曲库", 403);
+
+        const rows = db.getByPaths(paths); // 仅正常曲目(回收站条目不可改名)
+        if (!rows.length) return err("没有匹配的曲目", 404);
+        await mkdir(targetDir, { recursive: true });
+        let moved = 0, skipped = 0, failed = 0;
+        const failures: string[] = [];
+        for (const row of rows) {
+          const src = normalize(row.path);
+          if (!inLibrary(src)) { failed++; failures.push(`${row.filename}: 不在曲库范围内`); continue; }
+          const ext = extname(row.filename);
+          const stem = ext ? row.filename.slice(0, -ext.length) : row.filename;
+          const newName = prefix + stem + ext;
+          const dest = join(targetDir, newName);
+          if (dest === src || existsSync(dest)) { skipped++; continue; }
+          try {
+            await rename(src, dest);
+            // .lrc 歌词副文件跟随(与回收站 purge 口径一致)
+            try { await rename(src.replace(/\.[^.]+$/, ".lrc"), dest.replace(/\.[^.]+$/, ".lrc")); } catch { /* 无 sidecar */ }
+            db.renamePath(src, dest, newName, targetDir);
+            moved++;
+          } catch (e) {
+            failed++;
+            failures.push(`${row.filename}: ${(e as Error).message}`);
+          }
+        }
+        return json({ ok: true, moved, skipped, failed, failures: failures.slice(0, 5) });
       }
       return err("unknown songs action", 404);
     }

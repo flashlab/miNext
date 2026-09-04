@@ -69,6 +69,11 @@ async function* walk(dirs: string[], exts: Set<string>): AsyncGenerator<string> 
   }
 }
 
+/** 文件创建时间(ns):statx birthtime,不支持/为 0 回退 mtime */
+function ctimeNsOf(st: { birthtimeMs: number; mtimeMs: number }): number {
+  return Math.floor((st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs) * 1e6);
+}
+
 export class Indexer {
   private refreshing = false;
 
@@ -94,7 +99,7 @@ export class Indexer {
       const exts = new Set(this.extensions.map((e) => e.toLowerCase()));
       const existing = this.db.allPathsMtime();
       const seen: string[] = [];
-      const toProbe: { path: string; mtimeNs: number; size: number }[] = [];
+      const toProbe: { path: string; mtimeNs: number; ctimeNs: number; size: number }[] = [];
       const dirs = this.getDirs();
 
       for await (const path of walk(dirs, exts)) {
@@ -103,7 +108,7 @@ export class Indexer {
           const mtimeNs = Math.floor(st.mtimeMs * 1e6);
           seen.push(path);
           if (existing.get(path) !== mtimeNs) {
-            toProbe.push({ path, mtimeNs, size: st.size });
+            toProbe.push({ path, mtimeNs, ctimeNs: ctimeNsOf(st), size: st.size });
           }
         } catch {
           /* 读取失败跳过 */
@@ -114,7 +119,7 @@ export class Indexer {
       const CONCURRENCY = 4;
       for (let i = 0; i < toProbe.length; i += CONCURRENCY) {
         await Promise.all(
-          toProbe.slice(i, i + CONCURRENCY).map(async ({ path, mtimeNs, size }) => {
+          toProbe.slice(i, i + CONCURRENCY).map(async ({ path, mtimeNs, ctimeNs, size }) => {
             const info = await probe(path);
             if (info) {
               const filename = basename(path);
@@ -130,6 +135,7 @@ export class Indexer {
                 duration_sec: info.duration,
                 size,
                 mtime_ns: mtimeNs,
+                ctime_ns: ctimeNs,
               });
             }
             done++;
@@ -141,6 +147,15 @@ export class Indexer {
       this.db.removePathsOutside(dirs);
       const pruned = this.db.removePathsNotIn(seen);
       if (pruned > 0) console.log(`索引清理: ${pruned} 个已消失文件`);
+      // ctime 回填:老行(ctime_ns=0)仅 stat 补采,不重新 ffprobe
+      const missingCtime = this.db.ctimeMissingPaths();
+      for (const p of missingCtime) {
+        try {
+          const st = await stat(p);
+          this.db.setCtime(p, ctimeNsOf(st));
+        } catch { /* 文件已消失等,跳过 */ }
+      }
+      if (missingCtime.length) console.log(`ctime 回填: ${missingCtime.length} 首`);
       return this.db.count();
     } finally {
       this.refreshing = false;

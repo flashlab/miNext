@@ -21,7 +21,16 @@ import { usePoll } from "@/lib/usePoll";
 import { toast } from "sonner";
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ChevronDown, FolderCog, ListMusic, MonitorPlay, Pause, Play, SkipBack, SkipForward, Trash2 } from "lucide-react";
 
-type SortField = "title" | "artist" | "album" | "duration";
+type SortField = "title" | "artist" | "album" | "duration" | "ctime";
+
+/** ctime_ns → 紧凑日期:当年 MM-DD,跨年 YY-MM-DD */
+function fmtCdate(ns?: number): string {
+  if (!ns) return "—";
+  const d = new Date(ns / 1e6);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return d.getFullYear() === new Date().getFullYear() ? md : `${String(d.getFullYear()).slice(2)}-${md}`;
+}
 
 function SortHead({ label, field, sort, order, onSort }: {
   label: string; field: SortField; sort: SortField | ""; order: "asc" | "desc";
@@ -33,6 +42,54 @@ function SortHead({ label, field, sort, order, onSort }: {
       {label}
       {active && (order === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
     </button>
+  );
+}
+
+/** 批量改名/移动弹窗:模式串 = 相对默认曲库的 [子目录/][文件名前缀] */
+function RenameDialog({ paths, onDone }: { paths: string[]; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [pattern, setPattern] = useState("");
+  const [busy, setBusy] = useState(false);
+  const go = () => {
+    const pat = pattern.trim();
+    if (!pat) return toast.error("请输入模式");
+    setBusy(true);
+    api.renameSongs(paths, pat)
+      .then((r) => {
+        const msg = `成功 ${r.moved} · 跳过 ${r.skipped} · 失败 ${r.failed}`;
+        if (r.failed) { toast.error(`改名:${msg}`); console.error("rename failures:", r.failures); }
+        else toast.success(`改名:${msg}`);
+        if (r.moved > 0) { setOpen(false); setPattern(""); onDone(); }
+      })
+      .catch((e) => toast.error(String(e)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger className="inline-flex h-7 items-center rounded-md px-2 text-xs text-foreground hover:bg-accent">
+        改名
+      </DialogTrigger>
+      <DialogContent className="border-border bg-background sm:max-w-md">
+        <DialogHeader><DialogTitle className="text-sm">批量改名 / 移动(共 {paths.length} 首)</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            以默认曲库目录为基准:输入 <span className="font-mono text-foreground">new/</span> 移到该子目录;
+            <span className="font-mono text-foreground">new/abc-</span> 移动并给文件名加前缀;
+            <span className="font-mono text-foreground">abc-</span> 仅加前缀。目标已存在则跳过。
+          </p>
+          <Input value={pattern} onChange={(e) => setPattern(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && !busy && go()}
+            placeholder="如 new/ 或 new/abc- 或 abc-" autoFocus
+            className="h-8 border-border bg-transparent font-mono text-xs" />
+          <div className="flex justify-end gap-1.5">
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => setOpen(false)}>取消</Button>
+            <Button size="sm" disabled={busy} className="h-7 bg-amber-500 px-3 text-xs text-zinc-950 hover:bg-amber-400" onClick={go}>
+              {busy ? "执行中…" : "执行"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -154,8 +211,8 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
   const visibleSpeakers = speakers.filter((s) => !s.hidden);
   const [q, setQ] = useState("");
   const [submitted, setSubmitted] = useState("");
-  const [sort, setSort] = useState<SortField | "">("");
-  const [order, setOrder] = useState<"asc" | "desc">("asc");
+  const [sort, setSort] = useState<SortField | "">("ctime");
+  const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [pageSize, setPageSize] = useState<string>("50");
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -398,7 +455,7 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
           </DropdownMenu>
           <DropdownMenu>
             <DropdownMenuTrigger className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-transparent px-2 text-xs hover:bg-accent">
-              加入播放列表 <ChevronDown className="h-3 w-3" />
+              入列 <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
               <DropdownMenuItem onClick={localAppend}>
@@ -409,12 +466,13 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-red-500" onClick={batchDelete}>删除所选</Button>
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => setSelected(new Set())}>取消选择</Button>
+          <RenameDialog paths={paths} onDone={() => { setSelected(new Set()); reload(); }} />
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-red-500" onClick={batchDelete}>删除</Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => setSelected(new Set())}>取消</Button>
         </div>
       )}
 
-      <div className="overflow-x-auto rounded border border-border">
+      <div className="overflow-x-auto overflow-y-hidden rounded border border-border">
         <table className="w-full min-w-[640px]">
           <thead>
             <tr className="border-b border-border">
@@ -425,6 +483,7 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
               <th className="px-2 py-2 text-left text-muted-foreground">{trashMode ? <span className="text-xs">歌手</span> : <SortHead label="歌手" field="artist" sort={sort} order={order} onSort={onSort} />}</th>
               <th className="px-2 py-2 text-left text-muted-foreground">{trashMode ? <span className="text-xs">专辑</span> : <SortHead label="专辑" field="album" sort={sort} order={order} onSort={onSort} />}</th>
               <th className="w-16 px-2 py-2 text-right text-muted-foreground">{trashMode ? <span className="text-xs">时长</span> : <SortHead label="时长" field="duration" sort={sort} order={order} onSort={onSort} />}</th>
+              <th className="w-14 px-2 py-2 text-right text-muted-foreground">{trashMode ? <span className="text-xs">时间</span> : <SortHead label="时间" field="ctime" sort={sort} order={order} onSort={onSort} />}</th>
             </tr>
           </thead>
           <tbody>
@@ -435,10 +494,11 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
                 <td className="max-w-28 truncate px-2 py-1.5 text-xs text-muted-foreground">{s.artist || "—"}</td>
                 <td className="max-w-28 truncate px-2 py-1.5 text-xs text-muted-foreground">{s.album || "—"}</td>
                 <td className="px-2 py-1.5 text-right font-mono text-xs text-muted-foreground">{fmtDuration(s.duration_sec)}</td>
+                <td className="px-2 py-1.5 text-right font-mono text-xs text-muted-foreground">{fmtCdate(s.ctime_ns)}</td>
               </tr>
             ))}
             {!shownSongs.length && (
-              <tr><td colSpan={5} className="px-2 py-6 text-center text-xs text-muted-foreground">{trashMode ? "回收站为空" : "无结果"}</td></tr>
+              <tr><td colSpan={6} className="px-2 py-6 text-center text-xs text-muted-foreground">{trashMode ? "回收站为空" : "无结果"}</td></tr>
             )}
           </tbody>
         </table>

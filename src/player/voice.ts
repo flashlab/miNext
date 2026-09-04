@@ -117,6 +117,7 @@ export class VoicePipeline {
 
   /** 撤销上次语音删除(仅清标记,不回播放列表);记录已物理删除/已恢复则不可撤销 */
   async undoDelete() {
+    this.engine.armReplyInterrupt("voice undo");
     const slot = this.db.getSettingJSON<{ path: string; title: string }>("voice.lastTrash");
     if (!slot?.path) {
       await this.engine.speak("没有可撤销的删除");

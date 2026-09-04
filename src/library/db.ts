@@ -17,6 +17,7 @@ export interface SongRow {
   duration_sec: number;
   size: number;
   mtime_ns: number;
+  ctime_ns: number; // 文件创建时间(birthtime,不支持则回退 mtime)
   updated_at: number;
   deleted_at: number; // 0=正常;>0=标记删除(回收站)时间戳,文件仍在磁盘
   // 搜索影子列:繁→简 + 小写;显示仍用原列
@@ -43,6 +44,7 @@ const SORTABLE: Record<string, string> = {
   album: "album COLLATE NOCASE",
   duration: "duration_sec",
   filename: "filename COLLATE NOCASE",
+  ctime: "ctime_ns",
 };
 
 export class LibraryDb {
@@ -64,6 +66,7 @@ export class LibraryDb {
       duration_sec REAL NOT NULL DEFAULT 0,
       size INTEGER NOT NULL DEFAULT 0,
       mtime_ns INTEGER NOT NULL DEFAULT 0,
+      ctime_ns INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL DEFAULT 0
     )`);
     this.db.run("CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist)");
@@ -90,6 +93,7 @@ export class LibraryDb {
       (this.db.query("PRAGMA table_info(songs)").all() as { name: string }[]).map((c) => c.name),
     );
     if (!songCols.has("deleted_at")) this.db.run("ALTER TABLE songs ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0");
+    if (!songCols.has("ctime_ns")) this.db.run("ALTER TABLE songs ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT 0");
     for (const c of ["norm_title", "norm_artist", "norm_album", "norm_filename"]) {
       if (!songCols.has(c)) this.db.run(`ALTER TABLE songs ADD COLUMN ${c} TEXT NOT NULL DEFAULT ''`);
     }
@@ -146,18 +150,26 @@ export class LibraryDb {
   // ---- songs ----
   upsertSong(s: Omit<SongRow, "id" | "updated_at" | "deleted_at" | "norm_title" | "norm_artist" | "norm_album" | "norm_filename">) {
     this.db.run(
-      `INSERT INTO songs (path,title,artist,album,filename,dir,ext,duration_sec,size,mtime_ns,updated_at,norm_title,norm_artist,norm_album,norm_filename)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO songs (path,title,artist,album,filename,dir,ext,duration_sec,size,mtime_ns,ctime_ns,updated_at,norm_title,norm_artist,norm_album,norm_filename)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(path) DO UPDATE SET
          title=excluded.title, artist=excluded.artist, album=excluded.album,
          filename=excluded.filename, dir=excluded.dir, ext=excluded.ext,
          duration_sec=excluded.duration_sec, size=excluded.size,
-         mtime_ns=excluded.mtime_ns, updated_at=excluded.updated_at,
+         mtime_ns=excluded.mtime_ns, ctime_ns=excluded.ctime_ns, updated_at=excluded.updated_at,
          norm_title=excluded.norm_title, norm_artist=excluded.norm_artist,
          norm_album=excluded.norm_album, norm_filename=excluded.norm_filename`,
-      [s.path, s.title, s.artist, s.album, s.filename, s.dir, s.ext, s.duration_sec, s.size, s.mtime_ns, Date.now(),
+      [s.path, s.title, s.artist, s.album, s.filename, s.dir, s.ext, s.duration_sec, s.size, s.mtime_ns, s.ctime_ns, Date.now(),
        normText(s.title), normText(s.artist), normText(s.album), normText(s.filename)],
     );
+  }
+
+  // ---- ctime 回填(老库/老行;仅 stat,不重新 ffprobe) ----
+  ctimeMissingPaths(): string[] {
+    return (this.db.query("SELECT path FROM songs WHERE ctime_ns = 0").all() as { path: string }[]).map((r) => r.path);
+  }
+  setCtime(path: string, ctimeNs: number) {
+    this.db.run("UPDATE songs SET ctime_ns = ? WHERE path = ?", [ctimeNs, path]);
   }
 
   removePathsOutside(validDirs: string[]): number {
