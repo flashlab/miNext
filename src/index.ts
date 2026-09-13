@@ -5,6 +5,7 @@ import { Indexer } from "./library/indexer";
 import type { SearchSemantics } from "./library/search";
 import { SpeakerRegistry } from "./registry";
 import { PluginRegistry } from "./plugins/registry";
+import { lxDownload } from "./plugins/lxhost";
 import { createHttpServer } from "./http/server";
 
 const cfg = await loadConfig(process.env.MINEXT_CONFIG ?? "minext.config.json");
@@ -75,6 +76,7 @@ void indexer.refresh()
   .catch((e) => console.error("索引失败:", e));
 
 const plugins = new PluginRegistry(db);
+await lxDownload.load(plugins.ctx); // lx 源 JS 进进程级加载一次;换源 = 替换 data/lx-source.js + 重启
 
 createHttpServer({ cfg, db, indexer, registry, plugins, getDirs, getDefaultDir, getCommands, getSearchSem, getExtensions, webDist: "web/dist" });
 console.log(`HTTP 监听 :${cfg.httpPort}(API + 音乐文件 + SPA)`);

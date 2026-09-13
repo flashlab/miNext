@@ -64,7 +64,7 @@ export function startDownload(
       if (!dirsContain(req.dir)) throw new Error("目标目录不在曲库路径内(含子目录)");
       const plugin = registry.downloadPluginFor(req.source);
       if (!plugin) throw new Error(`没有已启用的下载插件支持音源 ${req.source}`);
-      const resolved = await plugin.resolve({ source: req.source, id: req.id, url: req.url, quality: req.quality }, registry.ctx);
+      const resolved = await plugin.resolve({ source: req.source, id: req.id, url: req.url, quality: req.quality, meta: req.meta }, registry.ctx);
 
       const r = await fetch(resolved.fileUrl, { signal: AbortSignal.timeout(120_000) });
       if (!r.ok) throw new Error(`拉取文件失败: HTTP ${r.status}`);

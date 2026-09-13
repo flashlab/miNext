@@ -47,7 +47,9 @@ export interface DownloadPlugin {
   sources: SourceDef[]; // 直链类插件用 [{ id: "url" }]
   defaultEnabledSources?: string[];
   qualities?: Record<string, string[]>; // source → 支持的音质
-  resolve(input: { source: string; id?: string; url?: string; quality?: string }, ctx: PluginCtx): Promise<ResolvedAudio>;
+  resolve(input: { source: string; id?: string; url?: string; quality?: string; meta?: { title?: string; artist?: string; album?: string } }, ctx: PluginCtx): Promise<ResolvedAudio>;
+  /** 运行时状态(合并进插件视图 extra,如 lx 宿主的已加载脚本信息) */
+  runtimeInfo?(): Record<string, unknown>;
 }
 
 export type AnyPlugin = SearchPlugin | DownloadPlugin;

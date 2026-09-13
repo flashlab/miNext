@@ -5,6 +5,7 @@ import type { Indexer } from "../library/indexer";
 import type { SearchSemantics } from "../library/search";
 import type { SpeakerRegistry } from "../registry";
 import type { PluginRegistry } from "../plugins/registry";
+import { deleteOverrideSource, writeOverrideSource } from "../plugins/lxhost";
 import { listJobs, startDownload } from "../jobs";
 import type { LoopMode } from "../player/engine";
 import { rename, unlink, mkdir, rmdir } from "node:fs/promises";
@@ -117,6 +118,20 @@ export function createHttpServer(deps: HttpDeps) {
         if (!r.ok) return err(r.error, 409);
         return json({ ok: true });
       }
+      // lx 自定义源:PUT 上传替换(原文 body,≤512KB),DELETE 恢复内置默认;两者都热重载无需重启
+      if (parts[1] === "lxdownload" && parts[2] === "source" && method === "PUT") {
+        const code = await req.text();
+        if (!code.trim()) return err("空文件");
+        if (code.length > 512 * 1024) return err("文件过大(上限 512KB)");
+        writeOverrideSource(code);
+        const info = await plugins.reloadLxSource();
+        return json({ ok: !info.loadFailed, ...info });
+      }
+      if (parts[1] === "lxdownload" && parts[2] === "source" && method === "DELETE") {
+        deleteOverrideSource();
+        const info = await plugins.reloadLxSource();
+        return json({ ok: true, ...info });
+      }
       return err("not found", 404);
     }
 
@@ -164,13 +179,13 @@ export function createHttpServer(deps: HttpDeps) {
       }
       // 试听:以最低音质解析直链(不下载)
       if (parts[1] === "resolve" && method === "POST") {
-        const body = (await req.json()) as { source?: string; id?: string };
+        const body = (await req.json()) as { source?: string; id?: string; meta?: { title?: string; artist?: string; album?: string } };
         if (!body.source || !body.id) return err("缺少 source/id");
         const plugin = plugins.downloadPluginFor(body.source);
         if (!plugin) return err(`音源 ${body.source} 没有已启用的下载插件`, 404);
         const lowest = plugin.qualities?.[body.source]?.[0];
         try {
-          const r = await plugin.resolve({ source: body.source, id: body.id, quality: lowest }, plugins.ctx);
+          const r = await plugin.resolve({ source: body.source, id: body.id, quality: lowest, meta: body.meta }, plugins.ctx);
           return json({ ok: true, fileUrl: r.fileUrl });
         } catch (e) {
           return err(String((e as Error).message || e), 502);
@@ -581,6 +596,8 @@ export function createHttpServer(deps: HttpDeps) {
 
   return Bun.serve({
     port: cfg.httpPort,
+    // 默认 idleTimeout 仅 10s:聚合搜索多源并发最坏 ~20s+,曾致请求被静默断连;放宽到 60s
+    idleTimeout: 60,
     async fetch(req) {
       const url = new URL(req.url);
       try {

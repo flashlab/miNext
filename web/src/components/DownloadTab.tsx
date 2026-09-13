@@ -20,6 +20,66 @@ import { ChevronDown, Download, Loader2, Pause, Play, Settings } from "lucide-re
 
 const SOURCE_NAMES: Record<string, string> = { wy: "网易云", tx: "QQ音乐", kg: "酷狗", url: "直链" };
 
+/** lx 自定义源管理:当前脚本信息 + 上传替换 + 恢复默认(上传后服务端热重载) */
+function LxSourceSection({ plugin, onChanged }: { plugin: PluginView; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const ex = plugin.extra ?? {};
+  const loadFailed = ex.loadFailed === true;
+  const isOverride = ex.override === true;
+
+  const upload = async (f: File) => {
+    if (f.size > 512 * 1024) { toast.error("文件过大(上限 512KB)"); return; }
+    setBusy(true);
+    try {
+      const r = await api.lxSourceUpload(await f.text());
+      if (r.loadFailed) toast.error(`加载失败:${r.loadError ?? "未知错误"}`);
+      else toast.success(`已切换为「${r.scriptName}」`);
+      onChanged();
+    } catch (e) { toast.error(String(e)); }
+    finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
+  };
+  const reset = async () => {
+    setBusy(true);
+    try {
+      const r = await api.lxSourceReset();
+      toast.success(`已恢复「${r.scriptName}」`);
+      onChanged();
+    } catch (e) { toast.error(String(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="space-y-1.5 rounded border border-border p-2">
+      <div className="flex items-center gap-2">
+        <Label className="text-xs text-muted-foreground">自定义源</Label>
+        <span className={`truncate text-[11px] ${loadFailed ? "text-red-400" : ""}`}>
+          {String(ex.scriptName ?? "(未加载)")}{loadFailed ? " · 加载失败" : ""}
+        </span>
+        <span className="font-mono text-[10px] text-muted-foreground">{String(ex.scriptMd5 ?? "").slice(0, 8)}</span>
+        <span className="ml-auto flex items-center gap-1">
+          <input ref={fileRef} type="file" accept=".js" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); }} />
+          <button type="button" disabled={busy} onClick={() => fileRef.current?.click()}
+            className="h-6 whitespace-nowrap rounded border border-border px-2 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
+            上传 .js 替换
+          </button>
+          {isOverride && (
+            <button type="button" disabled={busy} onClick={() => void reset()}
+              className="h-6 whitespace-nowrap rounded border border-border px-2 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
+              恢复默认
+            </button>
+          )}
+        </span>
+      </div>
+      {loadFailed && <p className="break-all font-mono text-[10px] text-red-400/80">{String(ex.loadError ?? "")}</p>}
+      <p className="text-[10px] text-muted-foreground">
+        当前:{isOverride ? "自定义覆盖" : "内置默认"};上传后热重载立即生效,加载失败时 lx 下载不可用。
+      </p>
+    </div>
+  );
+}
+
 function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
   plugin: PluginView;
   shared: Record<string, string>;
@@ -27,7 +87,7 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
   onChanged: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const keyField = plugin.id.startsWith("chksz") ? "chksz.apiKey" : plugin.id.startsWith("ynx") ? "ynx.apiKey" : "";
+  const keyField = plugin.id.startsWith("chksz") ? "chksz.apiKey" : plugin.id.startsWith("ynx") || plugin.id === "lxdownload" ? "ynx.apiKey" : "";
   const [key, setKey] = useState(keyField ? (shared[keyField] ?? "") : "");
   const [sources, setSources] = useState<Record<string, { enabled: boolean; limit: number; qualities: string[] }>>(() =>
     Object.fromEntries(plugin.sources.map((s) => [s.id, { enabled: s.enabled, limit: s.limit ?? 20, qualities: s.qualities ?? s.supportedQualities ?? [] }])),
@@ -61,6 +121,7 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
                 className="h-7 border-border bg-transparent font-mono text-xs" />
             </div>
           )}
+          {plugin.id === "lxdownload" && <LxSourceSection plugin={plugin} onChanged={onChanged} />}
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">音源</Label>
             {plugin.sources.map((s) => (
@@ -127,7 +188,7 @@ function usePreview() {
     }
     setLoading(key);
     try {
-      const d = await api.dlResolve(r.source, r.id);
+      const d = await api.dlResolve(r.source, r.id, { title: r.title, artist: r.artist, album: r.album });
       audioRef.current?.pause();
       const a = new Audio(d.fileUrl);
       a.onended = () => setPreviewKey("");
@@ -156,7 +217,8 @@ export function DownloadTab() {
 
   const plugins = pluginData?.plugins ?? [];
   const shared = pluginData?.shared ?? {};
-  const downloadPlugin = plugins.find((p) => p.id === "chksz-download");
+  const downloadPluginFor = (source: string) =>
+    plugins.find((p) => p.kind === "download" && p.sources.some((s) => s.id === source && s.enabled));
   const sharedDir = shared["dl.dir"] || dirs?.defaultDir || dirs?.dirs[0] || "";
 
   const search = () => {
@@ -195,6 +257,13 @@ export function DownloadTab() {
                   </Badge>
                 ))}
               </div>
+              {p.id === "lxdownload" && (
+                <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={String(p.extra?.scriptMd5 ?? "")}>
+                  {String(p.extra?.scriptName ?? "(未加载)")}
+                  {p.extra?.loadFailed ? " · 加载失败" : ""}
+                  {p.extra?.override ? " · 自定义" : ""}
+                </p>
+              )}
             </CardContent>
           </Card>
         ))}
@@ -248,7 +317,7 @@ export function DownloadTab() {
                 const isPreviewing = preview.previewKey === key;
                 const isLoading = preview.loading === key;
                 const qualities = (r.extra?.qualities as string[] | undefined)
-                  ?? downloadPlugin?.sources.find((s) => s.id === r.source)?.qualities
+                  ?? downloadPluginFor(r.source)?.sources.find((s) => s.id === r.source)?.qualities
                   ?? [];
                 return (
                   <tr key={`${key}-${i}`} className="border-b border-border/60 last:border-0 hover:bg-accent/50">

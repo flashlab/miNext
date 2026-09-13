@@ -2,7 +2,8 @@
 import type { LibraryDb } from "../library/db";
 import type { AnyPlugin, DownloadPlugin, PluginCtx, SearchPlugin } from "./types";
 import { chkszDownload, chkszSearch } from "./chksz";
-import { ynxDownload, ynxSearch } from "./ynx";
+import { ynxSearch } from "./ynx";
+import { lxDownload } from "./lxhost";
 
 export interface SourceSetting {
   enabled: boolean;
@@ -19,7 +20,7 @@ export interface PluginPublicView {
 }
 
 export class PluginRegistry {
-  readonly plugins: AnyPlugin[] = [chkszSearch, chkszDownload, ynxSearch, ynxDownload];
+  readonly plugins: AnyPlugin[] = [chkszSearch, chkszDownload, ynxSearch, lxDownload];
 
   constructor(private db: LibraryDb) {}
 
@@ -93,7 +94,7 @@ export class PluginRegistry {
             supportedQualities: p.kind === "download" ? p.qualities?.[src.id] : undefined,
           };
         }),
-        extra: { ...extra, hasToken: Boolean((s as { token?: string }).token) },
+        extra: { ...extra, hasToken: Boolean((s as { token?: string }).token), ...(p.kind === "download" ? (p.runtimeInfo?.() ?? {}) : {}) },
       };
     });
   }
@@ -106,5 +107,11 @@ export class PluginRegistry {
       if (p.sources.some((s) => s.id === source) && this.sourceEnabled(p, source)) return p;
     }
     return null;
+  }
+
+  /** 前端换源/删源后热重载 lx 宿主,返回最新运行时信息(loadFailed/loadError 供 UI 反馈) */
+  async reloadLxSource(): Promise<Record<string, unknown>> {
+    await lxDownload.load(this.ctx);
+    return lxDownload.runtimeInfo();
   }
 }

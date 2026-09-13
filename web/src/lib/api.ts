@@ -83,8 +83,17 @@ export const api = {
   dlDownload: (body: { source: string; id?: string; url?: string; quality?: string; dir: string; meta?: { title?: string; artist?: string; album?: string } }) =>
     post<{ ok: boolean; job: DlJob }>("/api/dl/download", body),
   libraryTree: (path: string) => req<{ path: string; dirs: string[] }>(`/api/library/tree?path=${encodeURIComponent(path)}`),
-  dlResolve: (source: string, id: string) => post<{ ok: boolean; fileUrl: string }>("/api/dl/resolve", { source, id }),
+  dlResolve: (source: string, id: string, meta?: { title?: string; artist?: string; album?: string }) =>
+    post<{ ok: boolean; fileUrl: string }>("/api/dl/resolve", { source, id, meta }),
   dlJobs: () => req<{ jobs: DlJob[] }>("/api/dl/jobs"),
+
+  // ---- lx 自定义源:上传替换/恢复默认(服务端热重载,无需重启) ----
+  lxSourceUpload: (code: string) =>
+    req<{ ok: boolean; scriptName: string; scriptMd5: string; override: boolean; loadFailed: boolean; loadError?: string }>(
+      "/api/plugins/lxdownload/source", { method: "PUT", body: code, headers: { "content-type": "text/plain" } }),
+  lxSourceReset: () =>
+    req<{ ok: boolean; scriptName: string; scriptMd5: string; override: boolean; loadFailed: boolean; loadError?: string }>(
+      "/api/plugins/lxdownload/source", { method: "DELETE" }),
 };
 
 /** 曲库文件的 HTTP 播放地址(服务端 /music/ 带 Range) */
