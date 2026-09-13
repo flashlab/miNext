@@ -4,6 +4,7 @@ import type { AnyPlugin, DownloadPlugin, PluginCtx, SearchPlugin } from "./types
 import { chkszDownload, chkszSearch } from "./chksz";
 import { ynxSearch } from "./ynx";
 import { lxDownload } from "./lxhost";
+import { directSearch } from "./direct";
 
 export interface SourceSetting {
   enabled: boolean;
@@ -20,7 +21,8 @@ export interface PluginPublicView {
 }
 
 export class PluginRegistry {
-  readonly plugins: AnyPlugin[] = [chkszSearch, chkszDownload, ynxSearch, lxDownload];
+  // 注册序即运行时互斥优先级:directSearch 居首,遗留双开状态下直连赢(保存时另有 409 校验)
+  readonly plugins: AnyPlugin[] = [directSearch, chkszSearch, chkszDownload, ynxSearch, lxDownload];
 
   constructor(private db: LibraryDb) {}
 
@@ -107,6 +109,15 @@ export class PluginRegistry {
       if (p.sources.some((s) => s.id === source) && this.sourceEnabled(p, source)) return p;
     }
     return null;
+  }
+
+  /** 平台显示名(跨插件查,供"xx未激活下载插件"这类提示用) */
+  sourceDisplayName(source: string): string {
+    for (const p of this.plugins) {
+      const s = p.sources.find((x) => x.id === source);
+      if (s) return s.name;
+    }
+    return source;
   }
 
   /** 前端换源/删源后热重载 lx 宿主,返回最新运行时信息(loadFailed/loadError 供 UI 反馈) */

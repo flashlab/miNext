@@ -18,7 +18,7 @@ import { usePoll } from "@/lib/usePoll";
 import { toast } from "sonner";
 import { ChevronDown, Download, Loader2, Pause, Play, Settings } from "lucide-react";
 
-const SOURCE_NAMES: Record<string, string> = { wy: "网易云", tx: "QQ音乐", kg: "酷狗", url: "直链" };
+const SOURCE_NAMES: Record<string, string> = { kw: "酷我", wy: "网易云", tx: "QQ音乐", kg: "酷狗", bili: "哔哩哔哩", yt: "YouTube", url: "直链" };
 
 /** lx 自定义源管理:当前脚本信息 + 上传替换 + 恢复默认(上传后服务端热重载) */
 function LxSourceSection({ plugin, onChanged }: { plugin: PluginView; onChanged: () => void }) {

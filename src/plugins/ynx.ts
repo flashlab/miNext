@@ -86,7 +86,7 @@ export const ynxSearch: SearchPlugin = {
   kind: "search",
   id: "ynx-search",
   name: "枫雨搜索(玉宁熙)",
-  defaultEnabledSources: ["kw"], // 默认只开酷我,避免与 chksz 撞源;mg 解析上游已坏,kg 需用户组
+  defaultEnabledSources: [], // 直连搜索默认接管;枫雨搜索作备用,需手动启用(保存时有 409 互斥);mg 解析上游已坏
   sources: [
     { id: "kw", name: "酷我" },
     { id: "mg", name: "咪咕" },

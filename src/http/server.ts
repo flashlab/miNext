@@ -141,10 +141,13 @@ export function createHttpServer(deps: HttpDeps) {
         if (!q) return err("缺少 q");
         const view = plugins.view();
         const searches: Promise<unknown[]>[] = [];
+        const claimed = new Set<string>(); // 运行时互斥:同平台注册序靠前者赢(保存时 409 拦截,这里兜遗留双开)
         for (const p of plugins.searchPlugins()) {
           for (const src of p.sources) {
             const sv = view.find((v) => v.id === p.id)?.sources.find((s) => s.id === src.id);
             if (!sv?.enabled) continue;
+            if (claimed.has(src.id)) { console.log(`[plugins] 音源 ${src.id} 已被排前的搜索插件接管,跳过 ${p.id}`); continue; }
+            claimed.add(src.id);
             searches.push(
               p.search(src.id, q, sv.limit ?? 20, plugins.ctx)
                 .then((r) => r as unknown[])
@@ -182,7 +185,7 @@ export function createHttpServer(deps: HttpDeps) {
         const body = (await req.json()) as { source?: string; id?: string; meta?: { title?: string; artist?: string; album?: string } };
         if (!body.source || !body.id) return err("缺少 source/id");
         const plugin = plugins.downloadPluginFor(body.source);
-        if (!plugin) return err(`音源 ${body.source} 没有已启用的下载插件`, 404);
+        if (!plugin) return err(`${plugins.sourceDisplayName(body.source ?? "")}未激活下载插件`, 404);
         const lowest = plugin.qualities?.[body.source]?.[0];
         try {
           const r = await plugin.resolve({ source: body.source, id: body.id, quality: lowest, meta: body.meta }, plugins.ctx);

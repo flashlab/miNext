@@ -53,6 +53,7 @@ export const chkszSearch: SearchPlugin = {
   kind: "search",
   id: "chksz-search",
   name: "chksz 搜索",
+  defaultEnabledSources: [], // 直连搜索默认接管;中转作备用,需手动启用(保存时有 409 互斥)
   sources: [
     { id: "wy", name: "网易云" },
     { id: "tx", name: "QQ音乐" },
