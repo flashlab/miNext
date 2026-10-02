@@ -136,13 +136,13 @@ function handle(t: string, d0: unknown) {
       break;
     }
     case "global":
-      set({ global: d as GlobalSettings });
+      set({ global: d0 as GlobalSettings });
       break;
     case "stats":
-      set({ stats: d as { total: number; refreshing: boolean } });
+      set({ stats: d0 as { total: number; refreshing: boolean } });
       break;
     case "invalidate":
-      fireInvalidate(String(d));
+      fireInvalidate(String(d0));
       break;
     case "ping":
       try {
