@@ -9,9 +9,11 @@ const clients = new Set<Client>();
 
 export function addClient(ws: Client) {
   clients.add(ws);
+  broadcast("clients", clients.size);
 }
 export function removeClient(ws: Client) {
   clients.delete(ws);
+  broadcast("clients", clients.size);
 }
 export function clientCount(): number {
   return clients.size;

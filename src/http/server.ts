@@ -8,7 +8,7 @@ import type { PluginRegistry } from "../plugins/registry";
 import { deleteOverrideSource, writeOverrideSource } from "../plugins/lxhost";
 import { listJobs, clearJobs, startDownload } from "../jobs";
 import { getPreview, setPreview, clearPreview } from "../dlPreview";
-import { addClient, removeClient, sendTo, emitSpeaker, emitPlugins, emitGlobal, emitInvalidate, startHeartbeat } from "../sync";
+import { addClient, removeClient, sendTo, clientCount, emitSpeaker, emitPlugins, emitGlobal, emitInvalidate, startHeartbeat } from "../sync";
 import type { LoopMode } from "../player/engine";
 import { rename, unlink, mkdir, rmdir } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
@@ -146,6 +146,7 @@ export function createHttpServer(deps: HttpDeps) {
   /** 推送快照:浏览器连上 /api/ws 时的全量初始态 */
   async function buildSnapshot() {
     return {
+      clients: clientCount(),
       speakers: await buildSpeakers(),
       preview: getPreview(),
       jobs: listJobs(),

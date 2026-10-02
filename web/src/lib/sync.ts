@@ -5,8 +5,14 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "./api";
 import type { DlJob, DlPreview, GlobalSettings, PluginView, Speaker } from "./types";
 
+export type LinkState = "connected" | "reconnecting" | "offline";
+
 export interface SyncState {
   connected: boolean;
+  /** 三态:connected=绿 / reconnecting=黄(<3 次失败) / offline=红(>=3 次失败) */
+  linkState: LinkState;
+  /** 当前 /api/ws 连接数(即打开的页面数) */
+  clients: number;
   speakers: Speaker[];
   preview: DlPreview | null;
   jobs: DlJob[];
@@ -16,8 +22,12 @@ export interface SyncState {
   stats: { total: number; refreshing: boolean } | null;
 }
 
+const OFFLINE_AFTER_FAILURES = 3;
+
 let state: SyncState = {
   connected: false,
+  linkState: "reconnecting",
+  clients: 0,
   speakers: [],
   preview: null,
   jobs: [],
@@ -89,19 +99,28 @@ let ws: WebSocket | null = null;
 let started = false;
 let retryMs = 1000;
 let sawSnapshot = false;
+let failures = 0; // 连续重连失败次数:>=3 视为离线(红),之前为重连中(黄)
 
 function handle(t: string, d0: unknown) {
   switch (t) {
+    case "clients": {
+      const n = Number(d0);
+      if (Number.isFinite(n) && n >= 0) set({ clients: n });
+      break;
+    }
     case "snapshot": {
       sawSnapshot = true;
       // 服务端 snapshot 的 plugins 字段是 {plugins, shared} 复合体,这里摊平进 store
       const d = d0 as {
+        clients?: number;
         speakers?: Speaker[]; preview?: DlPreview | null; jobs?: DlJob[];
         plugins?: { plugins?: PluginView[]; shared?: Record<string, string> };
         global?: GlobalSettings | null; stats?: { total: number; refreshing: boolean } | null;
       };
       set({
         connected: true,
+        linkState: "connected",
+        clients: typeof d.clients === "number" && d.clients >= 0 ? d.clients : 1,
         speakers: Array.isArray(d.speakers) ? d.speakers : [],
         preview: d.preview ?? null,
         jobs: Array.isArray(d.jobs) ? d.jobs : [],
@@ -169,7 +188,8 @@ function connect() {
   }
   ws.onopen = () => {
     retryMs = 1000;
-    set({ connected: true });
+    failures = 0;
+    set({ connected: true, linkState: "connected" });
     // 快照兜底:1.5s 内没收到 snapshot 就自己拉一次
     setTimeout(() => {
       if (!sawSnapshot) void refreshSpeakers();
@@ -184,7 +204,8 @@ function connect() {
     }
   };
   ws.onclose = () => {
-    set({ connected: false });
+    failures++;
+    set({ connected: false, linkState: failures >= OFFLINE_AFTER_FAILURES ? "offline" : "reconnecting" });
     schedule();
   };
   ws.onerror = () => {

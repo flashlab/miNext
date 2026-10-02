@@ -18,6 +18,7 @@ import { api, fmtDuration, musicUrl } from "@/lib/api";
 import type { DirsInfo, Song, Speaker } from "@/lib/types";
 import { DirTreePicker } from "@/components/DirTreePicker";
 import { usePoll } from "@/lib/usePoll";
+import { useSync } from "@/lib/sync";
 import { toast } from "sonner";
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ChevronDown, FolderCog, ListMusic, MonitorPlay, Pause, Play, SkipBack, SkipForward, Trash2 } from "lucide-react";
 
@@ -208,6 +209,7 @@ function LibraryDialog({ onChanged, onShowTrash }: { onChanged: () => void; onSh
 }
 
 export function MusicTab({ speakers }: { speakers: Speaker[] }) {
+  const refreshing = useSync((s) => s.stats?.refreshing ?? false); // 索引重建中:搜索按钮变「索引中」并禁用
   const visibleSpeakers = speakers.filter((s) => !s.hidden);
   const [q, setQ] = useState("");
   const [submitted, setSubmitted] = useState("");
@@ -417,11 +419,13 @@ export function MusicTab({ speakers }: { speakers: Speaker[] }) {
       ) : (
         <div className="flex flex-wrap gap-1.5">
           <Input value={q} onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && (setSubmitted(q.trim()), setPage(0))}
+            onKeyDown={(e) => e.key === "Enter" && !refreshing && (setSubmitted(q.trim()), setPage(0))}
             placeholder="搜索歌名/歌手/专辑/文件名;支持 [ti][ar][al][fn] 字段、and/or、* 通配…"
             className="h-8 min-w-48 flex-1 border-border bg-transparent text-xs" />
           <Button size="sm" variant="outline" className="h-8 border-border bg-transparent text-xs"
-            onClick={() => (setSubmitted(q.trim()), setPage(0))}>搜索</Button>
+            disabled={refreshing}
+            title={refreshing ? "曲库索引重建中,搜索暂不可用" : undefined}
+            onClick={() => (setSubmitted(q.trim()), setPage(0))}>{refreshing ? "索引中" : "搜索"}</Button>
           <LibraryDialog onChanged={reload} onShowTrash={() => void enterTrash()} />
         </div>
       )}
