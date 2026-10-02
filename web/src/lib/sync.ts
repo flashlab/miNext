@@ -90,15 +90,30 @@ let started = false;
 let retryMs = 1000;
 let sawSnapshot = false;
 
-function handle(t: string, d: unknown) {
+function handle(t: string, d0: unknown) {
   switch (t) {
     case "snapshot": {
       sawSnapshot = true;
-      set({ ...(d as Partial<SyncState>), connected: true });
+      // 服务端 snapshot 的 plugins 字段是 {plugins, shared} 复合体,这里摊平进 store
+      const d = d0 as {
+        speakers?: Speaker[]; preview?: DlPreview | null; jobs?: DlJob[];
+        plugins?: { plugins?: PluginView[]; shared?: Record<string, string> };
+        global?: GlobalSettings | null; stats?: { total: number; refreshing: boolean } | null;
+      };
+      set({
+        connected: true,
+        speakers: Array.isArray(d.speakers) ? d.speakers : [],
+        preview: d.preview ?? null,
+        jobs: Array.isArray(d.jobs) ? d.jobs : [],
+        plugins: Array.isArray(d.plugins?.plugins) ? d.plugins!.plugins! : [],
+        shared: d.plugins?.shared ?? {},
+        global: d.global ?? null,
+        stats: d.stats ?? null,
+      });
       break;
     }
     case "speaker": {
-      const patch = d as { id: string } & Partial<Speaker>;
+      const patch = d0 as { id: string } & Partial<Speaker>;
       const idx = state.speakers.findIndex((x) => x.id === patch.id);
       if (idx < 0) {
         void refreshSpeakers(); // 新实例:全量重取
@@ -110,14 +125,14 @@ function handle(t: string, d: unknown) {
       break;
     }
     case "preview":
-      set({ preview: (d as DlPreview | null) ?? null });
+      set({ preview: (d0 as DlPreview | null) ?? null });
       break;
     case "jobs":
-      set({ jobs: (d as DlJob[]) ?? [] });
+      set({ jobs: (d0 as DlJob[]) ?? [] });
       break;
     case "plugins": {
-      const p = d as { plugins: PluginView[]; shared: Record<string, string> };
-      set({ plugins: p.plugins ?? [], shared: p.shared ?? {} });
+      const pl = d0 as { plugins?: PluginView[]; shared?: Record<string, string> };
+      set({ plugins: Array.isArray(pl.plugins) ? pl.plugins : [], shared: pl.shared ?? {} });
       break;
     }
     case "global":
