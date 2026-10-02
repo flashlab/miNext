@@ -202,6 +202,8 @@ export function ensureSync() {
   started = true;
   connect();
   setInterval(() => void refreshSpeakers(), 30_000);
+  // 调试钩子:控制台执行 __minextSync() 可查看实时 store(排查推送问题时用)
+  (window as unknown as { __minextSync?: () => SyncState }).__minextSync = () => state;
 }
 
 /** 事件驱动 + 低频兜底的取数钩子(替代纯轮询 usePoll) */

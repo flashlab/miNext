@@ -10,7 +10,7 @@ import type {
 } from "./types";
 import { encodeRequest, parseAppMessage } from "./types";
 import { clearPreview } from "../dlPreview";
-import { emitSpeaker } from "../sync";
+import { emitInvalidate, emitSpeaker } from "../sync";
 
 export interface SpeakerLinkHandlers {
   /** ASR 最终文本 */
@@ -158,6 +158,7 @@ export class SpeakerLink {
       if (s === "Playing" || s === "Paused" || s === "Idle") {
         this.playing = s;
         emitSpeaker(this.id, { playing: s }); // 设备侧"变化即推",浏览器即时可见
+        emitInvalidate(`player:${this.id}`); // 播放页(队列/当前曲)同步重取
         this.handlers.onPlaying?.(s);
       }
     }
