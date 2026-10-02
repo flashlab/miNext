@@ -102,6 +102,19 @@ export interface DlResult {
   extra?: Record<string, unknown>;
 }
 
+/** 共享试听态(服务端):谁在哪个实例上试听哪首;untilTs=0 表示保持到停止 */
+export interface DlPreview {
+  key: string;
+  source: string;
+  id: string;
+  instance: string;
+  instanceName: string;
+  title?: string;
+  artist?: string;
+  startedAt: number;
+  untilTs: number;
+}
+
 export interface DlJob {
   id: number;
   label: string;

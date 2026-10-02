@@ -1,4 +1,4 @@
-import type { AlbumInfo, DirsInfo, DlJob, DlResult, GlobalSettings, LoopMode, PlayerState, PluginView, Song, Speaker, SpeakerCommands } from "./types";
+import type { AlbumInfo, DirsInfo, DlJob, DlPreview, DlResult, GlobalSettings, LoopMode, PlayerState, PluginView, Song, Speaker, SpeakerCommands } from "./types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, {
@@ -93,6 +93,10 @@ export const api = {
     post<{ ok: boolean; fileUrl: string }>("/api/dl/resolve", { source, id, meta }),
   dlJobs: () => req<{ jobs: DlJob[] }>("/api/dl/jobs"),
   dlClearJobs: () => req<{ ok: boolean; removed: number }>("/api/dl/jobs", { method: "DELETE" }),
+  dlPreview: () => req<{ preview: DlPreview | null }>("/api/dl/preview"),
+  dlPreviewSet: (body: { key: string; source: string; id: string; instance: string; title?: string; artist?: string; duration?: number }) =>
+    post<{ ok: boolean; preview: DlPreview }>("/api/dl/preview", body),
+  dlPreviewStop: () => req<{ ok: boolean; stopped: string | null }>("/api/dl/preview", { method: "DELETE" }),
 
   // ---- lx 自定义源:上传替换/恢复默认(服务端热重载,无需重启) ----
   lxSourceUpload: (code: string) =>

@@ -192,26 +192,20 @@ function SortHead({ label, field, sort, order, onSort, align = "left" }: {
   );
 }
 
-/** 试听:本地=浏览器 Audio;实例=直链落音箱(先 engine.stop 压掉自动续播定时器,不进入播放列表) */
-function usePreview(targetId: string) {
+/** 试听:本地=浏览器 Audio(本标签页);实例=直链落音箱(共享态在服务端,跨标签页/设备可见可停) */
+function usePreview(targetId: string, shared: { key: string; stop: () => Promise<void>; reload: () => void }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const playingOnRef = useRef<{ kind: "local" } | { kind: "speaker"; id: string } | null>(null);
   const [previewKey, setPreviewKey] = useState("");
   const [loading, setLoading] = useState("");
   const flowRef = useRef(0); // 试听流程令牌:新一轮点击使旧流程作废
 
-  const clearTimer = () => {
-    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-  };
-
   /** 按实际播放位置停掉当前试听 */
   const stopCurrent = async () => {
-    clearTimer();
     const on = playingOnRef.current;
     playingOnRef.current = null;
     setPreviewKey("");
-    if (on?.kind === "speaker") await api.toolPause(on.id).catch(() => {});
+    if (on?.kind === "speaker") await shared.stop();
     else if (on?.kind === "local") { audioRef.current?.pause(); audioRef.current = null; }
   };
 
@@ -219,6 +213,7 @@ function usePreview(targetId: string) {
     const key = `${r.source}:${r.id}`;
     if (loading === key) return; // 解析中再点=忽略,防重复解析
     if (previewKey === key) { await stopCurrent(); return; }
+    if (shared.key === key) { await shared.stop(); return; } // 别的标签页/设备起的音箱试听
     const my = ++flowRef.current;
     setLoading(key);
     try {
@@ -236,13 +231,11 @@ function usePreview(targetId: string) {
       } else {
         await api.stop(targetId); // 暂停队列播放并取消自动续播定时器(列表与位置保留)
         await api.toolPlayUrl(targetId, d.fileUrl);
+        // 共享试听态:服务端记实例与到期(时长+2s),跨标签页/设备可见;时长未知=保持到停止
+        await api.dlPreviewSet({ key, source: r.source, id: r.id, instance: targetId, title: r.title, artist: r.artist, duration: r.duration });
         playingOnRef.current = { kind: "speaker", id: targetId };
         setPreviewKey(key);
-        clearTimer();
-        if (r.duration && r.duration > 0) {
-          // 音箱模式没有 ended 回调,按时长 + 缓冲复位播放中标记
-          timerRef.current = setTimeout(() => { playingOnRef.current = null; setPreviewKey(""); }, (r.duration + 2) * 1000);
-        }
+        shared.reload();
       }
     } catch (e) {
       toast.error(String(e));
@@ -257,6 +250,7 @@ export function DownloadTab({ speakers }: { speakers: Speaker[] }) {
   const { data: pluginData, reload: reloadPlugins } = usePoll(() => api.plugins(), 30000);
   const { data: dirs } = usePoll<DirsInfo>(() => api.dirs(), 60000);
   const { data: jobsData, reload: reloadJobs } = usePoll(() => api.dlJobs(), 3000);
+  const { data: previewData, reload: reloadPreview } = usePoll(() => api.dlPreview(), 3000);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<DlResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -274,7 +268,13 @@ export function DownloadTab({ speakers }: { speakers: Speaker[] }) {
   const visibleSpeakers = speakers.filter((s) => !s.hidden);
   const savedPreview = shared["dl.preview"] ?? "";
   const previewTarget = previewLocal ?? (visibleSpeakers.some((s) => s.id === savedPreview) ? savedPreview : "");
-  const preview = usePreview(previewTarget);
+  const serverPreview = previewData?.preview ?? null;
+  /** 停共享试听:服务端暂停记录的实例并清态(任何标签页/设备都可停) */
+  const stopShared = async () => {
+    try { await api.dlPreviewStop(); } catch (e) { toast.error(String(e)); }
+    reloadPreview();
+  };
+  const preview = usePreview(previewTarget, { key: serverPreview?.key ?? "", stop: stopShared, reload: reloadPreview });
 
   const setPreviewTarget = (id: string) => {
     setPreviewLocal(id);
@@ -418,7 +418,7 @@ export function DownloadTab({ speakers }: { speakers: Speaker[] }) {
             <tbody>
               {sorted.map((r, i) => {
                 const key = `${r.source}:${r.id}`;
-                const isPreviewing = preview.previewKey === key;
+                const isPreviewing = preview.previewKey === key || serverPreview?.key === key;
                 const isLoading = preview.loading === key;
                 const qualities = (r.extra?.qualities as string[] | undefined)
                   ?? downloadPluginFor(r.source)?.sources.find((s) => s.id === r.source)?.qualities
@@ -428,7 +428,9 @@ export function DownloadTab({ speakers }: { speakers: Speaker[] }) {
                     <td className="px-2 py-1.5">
                       <button
                         className="group relative block h-7 w-7 overflow-hidden rounded"
-                        title={isPreviewing ? "停止试听" : `试听(最低音质)${previewTarget ? " · 音箱" : ""}`}
+                        title={isPreviewing
+                          ? `停止试听${serverPreview && serverPreview.instance !== previewTarget ? ` · ${serverPreview.instanceName}` : ""}`
+                          : `试听(最低音质)${previewTarget ? " · 音箱" : ""}`}
                         onClick={() => void preview.toggle(r)}
                       >
                         <img

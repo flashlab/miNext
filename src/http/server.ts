@@ -7,6 +7,7 @@ import type { SpeakerRegistry } from "../registry";
 import type { PluginRegistry } from "../plugins/registry";
 import { deleteOverrideSource, writeOverrideSource } from "../plugins/lxhost";
 import { listJobs, clearJobs, startDownload } from "../jobs";
+import { getPreview, setPreview, clearPreview } from "../dlPreview";
 import type { LoopMode } from "../player/engine";
 import { rename, unlink, mkdir, rmdir } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
@@ -207,6 +208,43 @@ export function createHttpServer(deps: HttpDeps) {
         } catch (e) {
           return err(String((e as Error).message || e), 502);
         }
+      }
+      // 共享试听态:跨标签页/跨设备可见可停(只记落音箱的试听;本地播放属浏览器,不进这里)
+      if (parts[1] === "preview") {
+        if (method === "GET") return json({ preview: getPreview() });
+        if (method === "POST") {
+          const body = (await req.json()) as {
+            key?: string; source?: string; id?: string; instance?: string;
+            title?: string; artist?: string; duration?: number;
+          };
+          if (!body.key || !body.source || !body.id || !body.instance) return err("缺少 key/source/id/instance");
+          const rt = registry.get(body.instance);
+          if (!rt) return err(`未知音箱: ${body.instance}`, 404);
+          const prev = getPreview();
+          if (prev && prev.instance !== body.instance) {
+            // 换实例起播:先停掉上一个实例,避免两台同时出声(实例已删则直接清态)
+            const prt = registry.get(prev.instance);
+            if (prt) await prt.link.pausePlayback().catch(() => {});
+            else clearPreview(prev.instance);
+          }
+          const p = setPreview({
+            key: body.key, source: body.source, id: body.id,
+            instance: body.instance, instanceName: rt.link.name,
+            title: body.title, artist: body.artist, duration: body.duration,
+          });
+          console.log(`[dl] preview start ${p.key} on ${p.instance}${p.untilTs ? ` (until ${new Date(p.untilTs).toISOString()})` : ""} from ${ip}`);
+          return json({ ok: true, preview: p });
+        }
+        if (method === "DELETE") {
+          const p = getPreview();
+          if (!p) return json({ ok: true, stopped: null });
+          const prt = registry.get(p.instance);
+          if (prt) await prt.link.pausePlayback().catch(() => {});
+          clearPreview(); // 实例已删时钩子不会跑,这里兜底
+          console.log(`[dl] preview stop ${p.key} on ${p.instance} from ${ip}`);
+          return json({ ok: true, stopped: p.instance });
+        }
+        return err("unknown preview method", 404);
       }
       return err("not found", 404);
     }

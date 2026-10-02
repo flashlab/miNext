@@ -9,6 +9,7 @@ import type {
   WsResponse,
 } from "./types";
 import { encodeRequest, parseAppMessage } from "./types";
+import { clearPreview } from "../dlPreview";
 
 export interface SpeakerLinkHandlers {
   /** ASR 最终文本 */
@@ -242,8 +243,11 @@ export class SpeakerLink {
     return this.runShell(`ubus call mediaplayer player_play_url '${payload}'`);
   }
 
+  /** 暂停:音频静音即视作试听结束 → 顺带清共享试听态(单点收敛,任何暂停都不留幽灵态) */
   async pausePlayback() {
-    return this.runShell("mphelper pause");
+    const r = await this.runShell("mphelper pause");
+    clearPreview(this.id);
+    return r;
   }
 
   async resumePlayback() {
