@@ -8,6 +8,7 @@ import type { PluginRegistry } from "../plugins/registry";
 import { deleteOverrideSource, writeOverrideSource } from "../plugins/lxhost";
 import { listJobs, clearJobs, startDownload } from "../jobs";
 import { getPreview, setPreview, clearPreview } from "../dlPreview";
+import { addClient, removeClient, sendTo, emitSpeaker, emitPlugins, emitGlobal, emitInvalidate, startHeartbeat } from "../sync";
 import type { LoopMode } from "../player/engine";
 import { rename, unlink, mkdir, rmdir } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
@@ -99,33 +100,80 @@ export function createHttpServer(deps: HttpDeps) {
     } catch { return "?"; }
   }
 
+  /** 插件视图 + 共享设置(HTTP GET 与推送快照/事件共用) */
+  function pluginsPayload() {
+    return {
+      plugins: plugins.view(),
+      shared: {
+        "chksz.apiKey": db.getSetting("shared.chksz.apiKey") ?? "",
+        "ynx.apiKey": db.getSetting("shared.ynx.apiKey") ?? "",
+        "dl.dir": db.getSetting("shared.dl.dir") ?? "",
+        "dl.preview": db.getSetting("shared.dl.preview") ?? "",
+      },
+    };
+  }
+
+  /** 实例完整状态(HTTP GET 与推送快照共用;含麦克风 shell 探测,只用于冷读/快照) */
+  async function buildSpeakers() {
+    return Promise.all(registry.all().map(async (rt) => {
+      let micMuted: boolean | null = null;
+      if (rt.link.online) {
+        try { micMuted = (await rt.link.getMicStatus()) === "off"; } catch { micMuted = null; }
+      }
+      return {
+        id: rt.row.id,
+        name: rt.row.name,
+        wsPort: rt.row.ws_port,
+        commands: JSON.parse(rt.row.commands || "{}"),
+        hidden: Boolean(rt.row.hidden),
+        token: rt.row.token,
+        lastIp: rt.link.lastIp || rt.row.last_ip || "",
+        online: rt.link.online,
+        lastEventAt: rt.link.lastEventAt || null,
+        playing: rt.link.playing,
+        device: rt.link.deviceInfo,
+        micMuted,
+        nativeVoiceDisabledUntil: rt.engine.nativeVoiceDisabled ? rt.engine.nativeVoiceDisabledUntil : null,
+        player: {
+          loop: rt.engine.loop,
+          current: rt.engine.current,
+          queueLength: (await rt.engine.snapshot()).list.length,
+        },
+      };
+    }));
+  }
+
+  /** 推送快照:浏览器连上 /api/ws 时的全量初始态 */
+  async function buildSnapshot() {
+    return {
+      speakers: await buildSpeakers(),
+      preview: getPreview(),
+      jobs: listJobs(),
+      plugins: pluginsPayload(),
+      global: { commands: getCommands(), audioExtensions: getExtensions(), search: getSearchSem() },
+      stats: { total: db.count(), refreshing: indexer.isRefreshing },
+    };
+  }
+
   async function api(req: Request, url: URL, ip: string): Promise<Response> {
     const parts = url.pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
     const method = req.method;
 
     // ===== /api/plugins & /api/dl =====
     if (parts[0] === "plugins") {
-      if (parts.length === 1 && method === "GET") {
-        return json({
-          plugins: plugins.view(),
-          shared: {
-            "chksz.apiKey": db.getSetting("shared.chksz.apiKey") ?? "",
-            "ynx.apiKey": db.getSetting("shared.ynx.apiKey") ?? "",
-            "dl.dir": db.getSetting("shared.dl.dir") ?? "",
-            "dl.preview": db.getSetting("shared.dl.preview") ?? "",
-          },
-        });
-      }
+      if (parts.length === 1 && method === "GET") return json(pluginsPayload());
       if (parts[1] === "shared" && method === "PUT") {
         const body = (await req.json()) as { key?: string; value?: string };
         if (!body.key || !/^[a-z0-9._-]+$/i.test(body.key)) return err("非法 key");
         plugins.saveShared(body.key, body.value ?? "");
+        emitPlugins(pluginsPayload());
         return json({ ok: true });
       }
       if (parts[1] && parts[2] === "settings" && method === "PUT") {
         const body = (await req.json()) as Record<string, unknown>;
         const r = plugins.saveSettings(parts[1], body);
         if (!r.ok) return err(r.error, 409);
+        emitPlugins(pluginsPayload());
         return json({ ok: true });
       }
       // lx 自定义源:PUT 上传替换(原文 body,≤512KB),DELETE 恢复内置默认;两者都热重载无需重启
@@ -135,11 +183,13 @@ export function createHttpServer(deps: HttpDeps) {
         if (code.length > 512 * 1024) return err("文件过大(上限 512KB)");
         writeOverrideSource(code);
         const info = await plugins.reloadLxSource();
+        emitPlugins(pluginsPayload());
         return json({ ok: !info.loadFailed, ...info });
       }
       if (parts[1] === "lxdownload" && parts[2] === "source" && method === "DELETE") {
         deleteOverrideSource();
         const info = await plugins.reloadLxSource();
+        emitPlugins(pluginsPayload());
         return json({ ok: true, ...info });
       }
       return err("not found", 404);
@@ -252,35 +302,7 @@ export function createHttpServer(deps: HttpDeps) {
     // ===== /api/speakers =====
     if (parts[0] === "speakers") {
       if (parts.length === 1) {
-        if (method === "GET") {
-          return json(await Promise.all(registry.all().map(async (rt) => {
-            // 麦克风真实状态:在线时读音箱 /tmp/mipns/mute(3s 轮询一次,与物理静音键同步)
-            let micMuted: boolean | null = null;
-            if (rt.link.online) {
-              try { micMuted = (await rt.link.getMicStatus()) === "off"; } catch { micMuted = null; }
-            }
-            return {
-              id: rt.row.id,
-              name: rt.row.name,
-              wsPort: rt.row.ws_port,
-              commands: JSON.parse(rt.row.commands || "{}"),
-              hidden: Boolean(rt.row.hidden),
-              token: rt.row.token,
-              lastIp: rt.link.lastIp || rt.row.last_ip || "",
-              online: rt.link.online,
-              lastEventAt: rt.link.lastEventAt || null,
-              playing: rt.link.playing,
-              device: rt.link.deviceInfo,
-              micMuted,
-              nativeVoiceDisabledUntil: rt.engine.nativeVoiceDisabled ? rt.engine.nativeVoiceDisabledUntil : null,
-              player: {
-                loop: rt.engine.loop,
-                current: rt.engine.current,
-                queueLength: (await rt.engine.snapshot()).list.length,
-              },
-            };
-          })));
-        }
+        if (method === "GET") return json(await buildSpeakers());
         if (method === "POST") {
           const body = (await req.json()) as { wsPort?: number; name?: string; commands?: Record<string, string[]>; token?: string };
           if (!body.wsPort || body.wsPort < 1024 || body.wsPort > 65535) return err("非法端口");
@@ -297,6 +319,7 @@ export function createHttpServer(deps: HttpDeps) {
           };
           db.addSpeaker(row);
           registry.bind(row);
+          emitInvalidate("speakers");
           return json({ ok: true, speaker: row });
         }
       }
@@ -319,11 +342,13 @@ export function createHttpServer(deps: HttpDeps) {
         db.updateSpeaker(id, patch);
         const row = db.listSpeakers().find((s) => s.id === id)!;
         registry.reconfigure(row);
+        emitInvalidate("speakers");
         return json({ ok: true, speaker: row });
       }
       if (!action && method === "DELETE") {
         const wasOnline = rt.link.online;
         registry.remove(id);
+        emitInvalidate("speakers");
         return json({ ok: true, note: wasOnline ? "实例已删除,音箱将持续重试连接直至重新添加" : "实例已删除" });
       }
       if (action === "reconnect" && method === "POST") {
@@ -366,6 +391,7 @@ export function createHttpServer(deps: HttpDeps) {
           const { dir } = (await req.json()) as { dir?: string };
           if (!dir || !getDirs().includes(dir)) return err("目录不在曲库列表中");
           db.setSetting("defaultDir", dir);
+          emitInvalidate("dirs");
           return json({ ok: true });
         }
         if (method === "GET") return json({ dirs: getDirs(), defaultDir: getDefaultDir() });
@@ -379,6 +405,7 @@ export function createHttpServer(deps: HttpDeps) {
           const dirs = [...getDirs(), nd];
           db.setSettingJSON("musicDirs", dirs);
           void indexer.refresh().catch(() => {});
+          emitInvalidate("dirs");
           return json({ ok: true, dirs, defaultDir: getDefaultDir() });
         }
         if (method === "DELETE") {
@@ -395,6 +422,7 @@ export function createHttpServer(deps: HttpDeps) {
             } catch { /* 目录不存在等,忽略 */ }
           }
           void indexer.refresh().catch(() => {});
+          emitInvalidate("dirs");
           return json({ ok: true, dirs, defaultDir: getDefaultDir() });
         }
       }
@@ -426,6 +454,7 @@ export function createHttpServer(deps: HttpDeps) {
         const dest = join(targetDir, name);
         await Bun.write(dest, file);
         void indexer.refresh().catch(() => {});
+        emitInvalidate("library");
         return json({ ok: true, path: dest });
       }
       if (parts[1] === "delete" && method === "POST") {
@@ -435,6 +464,7 @@ export function createHttpServer(deps: HttpDeps) {
         // 回收站语义:仅标记删除,文件保留;物理删走 /api/trash/purge
         const row = db.markDeleted(path);
         if (!row) return err("曲目不存在", 404);
+        emitInvalidate("library");
         return json({ ok: true, note: "已标记删除,可在回收站恢复" });
       }
       if (parts[1] === "rename" && method === "POST") {
@@ -485,6 +515,7 @@ export function createHttpServer(deps: HttpDeps) {
             failures.push(`${row.filename}: ${(e as Error).message}`);
           }
         }
+        emitInvalidate("library");
         return json({ ok: true, moved, skipped, failed, failures: failures.slice(0, 5) });
       }
       return err("unknown songs action", 404);
@@ -498,7 +529,10 @@ export function createHttpServer(deps: HttpDeps) {
       if (parts[1] === "restore" && method === "POST") {
         const { paths } = (await req.json()) as { paths?: string[] };
         if (!paths?.length) return err("缺少 paths");
-        return json({ ok: true, restored: db.restore(paths) });
+        const restored = db.restore(paths);
+        emitInvalidate("library");
+        emitInvalidate("trash");
+        return json({ ok: true, restored });
       }
       if (parts[1] === "purge" && method === "POST") {
         const { paths } = (await req.json().catch(() => ({}))) as { paths?: string[] };
@@ -509,6 +543,8 @@ export function createHttpServer(deps: HttpDeps) {
             try { await unlink(p); } catch { /* 文件不存在等,忽略 */ }
           }
         }
+        emitInvalidate("library");
+        emitInvalidate("trash");
         return json({ ok: true, purged: rows.length });
       }
       return err("unknown trash action", 404);
@@ -558,6 +594,7 @@ export function createHttpServer(deps: HttpDeps) {
           db.setSettingJSON("searchSem", { ...getSearchSem(), ...s });
           registry.applySearchSem(getSearchSem());
         }
+        emitGlobal({ commands: getCommands(), audioExtensions: getExtensions(), search: getSearchSem() });
         return json({ ok: true, commands: getCommands(), audioExtensions: getExtensions(), search: getSearchSem() });
       }
       return err("method?", 405);
@@ -576,26 +613,30 @@ export function createHttpServer(deps: HttpDeps) {
         const { mode } = (await req.json()) as { mode?: LoopMode };
         if (!mode || !["off", "one", "all", "random"].includes(mode)) return err("非法循环模式");
         engine.loop = mode;
+        emitInvalidate(`player:${id}`);
         return json({ ok: true, loop: engine.loop });
       }
       if (action === "stop-after-current" && method === "POST") {
         const { on } = (await req.json()) as { on?: boolean };
         engine.stopAfterCurrent = Boolean(on);
+        emitInvalidate(`player:${id}`);
         return json({ ok: true, stopAfterCurrent: engine.stopAfterCurrent });
       }
       if (action === "volume" && method === "POST") {
         const { volume } = (await req.json()) as { volume?: number };
         if (volume === undefined) return err("缺少 volume");
         await engine.setVolume(volume);
+        emitInvalidate(`player:${id}`);
         return json({ ok: true });
       }
       if (action === "play" && method === "POST") {
         const body = (await req.json()) as { paths?: string[]; keyword?: string };
-        if (body.keyword) { void voice.playByKeyword(body.keyword); return json({ ok: true }); }
+        if (body.keyword) { void voice.playByKeyword(body.keyword); emitInvalidate(`player:${id}`); return json({ ok: true }); }
         if (body.paths?.length) {
           const songs = db.getByPaths(body.paths);
           if (!songs.length) return err("没有匹配的歌曲");
           void engine.playQueue(songs);
+          emitInvalidate(`player:${id}`);
           return json({ ok: true, count: songs.length });
         }
         return err("需要 paths 或 keyword");
@@ -605,20 +646,22 @@ export function createHttpServer(deps: HttpDeps) {
         if (!paths?.length) return err("缺少 paths");
         const songs = db.getByPaths(paths);
         void engine.appendQueue(songs);
+        emitInvalidate(`player:${id}`);
         return json({ ok: true, count: songs.length });
       }
       if (action === "list" && method === "POST") {
         const body = (await req.json()) as { op?: string; index?: number; from?: number; to?: number };
         if (!body.op) return err("缺少 op");
         await engine.listOp(body.op as "playNow" | "pinTop" | "playNext" | "remove" | "reorder", body);
+        emitInvalidate(`player:${id}`);
         return json({ ok: true });
       }
-      if (action === "toggle" && method === "POST") return json({ ok: true, result: await engine.toggle() });
+      if (action === "toggle" && method === "POST") { const result = await engine.toggle(); emitInvalidate(`player:${id}`); return json({ ok: true, result }); }
       // 停止(保留列表):试听落音箱前用它压掉队列播放与自动续播定时器
-      if (action === "stop" && method === "POST") { await engine.stop(`web from ${ip}`); return json({ ok: true }); }
-      if (action === "random" && method === "POST") { void voice.playRandom(); return json({ ok: true }); }
-      if (action === "next" && method === "POST") { void engine.next(); return json({ ok: true }); }
-      if (action === "prev" && method === "POST") { void engine.prev(); return json({ ok: true }); }
+      if (action === "stop" && method === "POST") { await engine.stop(`web from ${ip}`); emitInvalidate(`player:${id}`); return json({ ok: true }); }
+      if (action === "random" && method === "POST") { void voice.playRandom(); emitInvalidate(`player:${id}`); return json({ ok: true }); }
+      if (action === "next" && method === "POST") { void engine.next(); emitInvalidate(`player:${id}`); return json({ ok: true }); }
+      if (action === "prev" && method === "POST") { void engine.prev(); emitInvalidate(`player:${id}`); return json({ ok: true }); }
       return err("unknown player action", 404);
     }
 
@@ -667,6 +710,7 @@ export function createHttpServer(deps: HttpDeps) {
         if (typeof on !== "boolean") return err("缺少 on");
         const until = on ? Date.now() + 300_000 : 0;
         rt.engine.setNativeVoiceDisabled(until);
+        emitSpeaker(id, { nativeVoiceDisabledUntil: until || null });
         return json({ ok: true, nativeVoiceDisabledUntil: until || null });
       }
       // 麦克风开关:pnshelper event 8=关 / 7=开,返回执行后的真实状态
@@ -677,7 +721,9 @@ export function createHttpServer(deps: HttpDeps) {
         const r = muted ? await link.micOff() : await link.micOn();
         if (!shellOk(r)) return err(r.stdout.slice(0, 200) || "执行失败", 502);
         const status = await link.getMicStatus().catch(() => null);
-        return json({ ok: true, micMuted: status === "off" ? true : status === "on" ? false : null });
+        const micMutedNow = status === "off" ? true : status === "on" ? false : null;
+        emitSpeaker(id, { micMuted: micMutedNow });
+        return json({ ok: true, micMuted: micMutedNow });
       }
       return err("unknown tools action", 404);
     }
@@ -685,14 +731,28 @@ export function createHttpServer(deps: HttpDeps) {
     return err("not found", 404);
   }
 
-  return Bun.serve({
+  const server = Bun.serve({
     port: cfg.httpPort,
     // 默认 idleTimeout 仅 10s:聚合搜索多源并发最坏 ~20s+,曾致请求被静默断连;放宽到 60s
     idleTimeout: 60,
+    websocket: {
+      // 浏览器推送通道 /api/ws(单向);open 即发全量快照
+      open(ws) {
+        addClient(ws);
+        void buildSnapshot().then((d) => sendTo(ws, "snapshot", d)).catch(() => {});
+      },
+      message() { /* 只收浏览器 pong 保活,不处理业务 */ },
+      close(ws) { removeClient(ws); },
+    },
     async fetch(req, server) {
       const url = new URL(req.url);
       const ip = clientIp(server, req);
       try {
+        // 实时通道:浏览器推送(连上先快照,之后增量);动作仍走 HTTP
+        if (url.pathname === "/api/ws") {
+          if (server.upgrade(req)) return;
+          return new Response("ws upgrade failed", { status: 400 });
+        }
         if (url.pathname.startsWith("/api/")) return await api(req, url, ip);
 
         if (url.pathname.startsWith("/music/")) {
@@ -719,4 +779,7 @@ export function createHttpServer(deps: HttpDeps) {
       }
     },
   });
+
+  startHeartbeat(); // 25s 心跳:防 idleTimeout/NAT 掐线
+  return server;
 }

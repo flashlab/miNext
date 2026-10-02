@@ -1,7 +1,7 @@
+import { useEffect } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
-import { api } from "@/lib/api";
-import { usePoll } from "@/lib/usePoll";
+import { ensureSync, refreshSpeakers, useSync } from "@/lib/sync";
 import { useTheme, ThemeToggle } from "@/lib/theme";
 import { version } from "../package.json";
 import { SpeakersTab } from "@/components/SpeakersTab";
@@ -11,8 +11,12 @@ import { PlayerTab } from "@/components/PlayerTab";
 import { ToolsTab } from "@/components/ToolsTab";
 
 export default function App() {
-  const { data: speakers, reload } = usePoll(() => api.speakers(), 3000);
-  const { data: stats } = usePoll(() => api.libraryStats(), 15000);
+  const speakers = useSync((s) => s.speakers);
+  const stats = useSync((s) => s.stats);
+  const connected = useSync((s) => s.connected);
+  useEffect(() => {
+    ensureSync(); // 建立 /api/ws 实时通道(幂等)
+  }, []);
   const { theme, setTheme } = useTheme();
 
   return (
@@ -24,6 +28,10 @@ export default function App() {
             <span className="text-xs text-muted-foreground">小爱音箱管理</span>
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span
+              className={`inline-block h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-amber-500"}`}
+              title={connected ? "实时同步已连接" : "实时同步断开(自动重连中),状态可能滞后"}
+            />
             <span>曲库 {stats?.total ?? "…"} 首{stats?.refreshing ? " · 索引中…" : ""}</span>
             <ThemeToggle theme={theme} setTheme={setTheme} />
           </div>
@@ -38,7 +46,7 @@ export default function App() {
             <TabsTrigger value="tools" className="text-xs">工具</TabsTrigger>
           </TabsList>
           <TabsContent value="speakers">
-            <SpeakersTab speakers={speakers ?? []} onChanged={reload} />
+            <SpeakersTab speakers={speakers ?? []} onChanged={refreshSpeakers} />
           </TabsContent>
           <TabsContent value="player">
             <PlayerTab speakers={speakers ?? []} />
@@ -50,7 +58,7 @@ export default function App() {
             <DownloadTab speakers={speakers ?? []} />
           </TabsContent>
           <TabsContent value="tools">
-            <ToolsTab speakers={speakers ?? []} onChanged={reload} />
+            <ToolsTab speakers={speakers ?? []} onChanged={refreshSpeakers} />
           </TabsContent>
         </Tabs>
 

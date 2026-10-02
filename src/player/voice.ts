@@ -5,6 +5,7 @@ import type { Indexer } from "../library/indexer";
 import { searchByVoiceKeyword, isExactCommand, matchesAnyKeyword, extractPlayKeyword, type SearchSemantics } from "../library/search";
 import type { PlayerEngine } from "./engine";
 import type { SpeakerLink } from "../protocol/link";
+import { emitSpeaker } from "../sync";
 
 export class VoicePipeline {
   constructor(
@@ -30,7 +31,10 @@ export class VoicePipeline {
       onSpeakEvent: (text) => this.engine.onSpeakEvent(text),
       onConnect: () => {
         console.log(`[${this.link.id}] 音箱已连接`);
-        void this.link.probeDeviceInfo();
+        void this.link
+          .probeDeviceInfo()
+          .then(() => emitSpeaker(this.link.id, { device: this.link.deviceInfo }))
+          .catch(() => {});
       },
       onDisconnect: () => console.log(`[${this.link.id}] 音箱已断开`),
     });

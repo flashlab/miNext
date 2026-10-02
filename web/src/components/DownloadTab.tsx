@@ -14,7 +14,7 @@ import {
 import { api, fmtDuration } from "@/lib/api";
 import type { DirsInfo, DlResult, PluginView, Speaker } from "@/lib/types";
 import { DirTreePicker } from "@/components/DirTreePicker";
-import { usePoll } from "@/lib/usePoll";
+import { refreshJobs, refreshPlugins, refreshPreview, useLive, useSync } from "@/lib/sync";
 import { toast } from "sonner";
 import { ArrowDown, ArrowUp, ChevronDown, Download, Loader2, Pause, Play, Settings, Trash2 } from "lucide-react";
 import coverDefault from "@/assets/cover_default.svg";
@@ -247,10 +247,15 @@ function usePreview(targetId: string, shared: { key: string; stop: () => Promise
 }
 
 export function DownloadTab({ speakers }: { speakers: Speaker[] }) {
-  const { data: pluginData, reload: reloadPlugins } = usePoll(() => api.plugins(), 30000);
-  const { data: dirs } = usePoll<DirsInfo>(() => api.dirs(), 60000);
-  const { data: jobsData, reload: reloadJobs } = usePoll(() => api.dlJobs(), 3000);
-  const { data: previewData, reload: reloadPreview } = usePoll(() => api.dlPreview(), 3000);
+  // 实时态走 /api/ws store;目录树等冷数据走 invalidate + 低频兜底
+  const plugins = useSync((s) => s.plugins);
+  const shared = useSync((s) => s.shared);
+  const jobs = useSync((s) => s.jobs);
+  const serverPreview = useSync((s) => s.preview);
+  const { data: dirs } = useLive(() => api.dirs(), { fallbackMs: 60_000, keys: ["dirs"] });
+  const reloadPlugins = refreshPlugins;
+  const reloadJobs = refreshJobs;
+  const reloadPreview = refreshPreview;
   const [q, setQ] = useState("");
   const [results, setResults] = useState<DlResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -258,8 +263,6 @@ export function DownloadTab({ speakers }: { speakers: Speaker[] }) {
   const [order, setOrder] = useState<"asc" | "desc">("asc");
   const [previewLocal, setPreviewLocal] = useState<string | null>(null);
 
-  const plugins = pluginData?.plugins ?? [];
-  const shared = pluginData?.shared ?? {};
   const downloadPluginFor = (source: string) =>
     plugins.find((p) => p.kind === "download" && p.sources.some((s) => s.id === source && s.enabled));
   const sharedDir = shared["dl.dir"] || dirs?.defaultDir || dirs?.dirs[0] || "";
@@ -268,7 +271,6 @@ export function DownloadTab({ speakers }: { speakers: Speaker[] }) {
   const visibleSpeakers = speakers.filter((s) => !s.hidden);
   const savedPreview = shared["dl.preview"] ?? "";
   const previewTarget = previewLocal ?? (visibleSpeakers.some((s) => s.id === savedPreview) ? savedPreview : "");
-  const serverPreview = previewData?.preview ?? null;
   /** 停共享试听:服务端暂停记录的实例并清态(任何标签页/设备都可停) */
   const stopShared = async () => {
     try { await api.dlPreviewStop(); } catch (e) { toast.error(String(e)); }
@@ -484,7 +486,7 @@ export function DownloadTab({ speakers }: { speakers: Speaker[] }) {
       )}
 
       {/* 任务列表:右端清理已结束任务 */}
-      {(jobsData?.jobs.length ?? 0) > 0 && (
+      {jobs.length > 0 && (
         <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <Label className="text-xs text-muted-foreground">下载任务 · 保存到 <span className="font-mono">{sharedDir}</span></Label>
@@ -502,7 +504,7 @@ export function DownloadTab({ speakers }: { speakers: Speaker[] }) {
             </button>
           </div>
           <div className="rounded border border-border">
-            {jobsData!.jobs.map((j) => (
+            {jobs.map((j) => (
               <div key={j.id} className="flex items-center gap-2 border-b border-border/60 px-2 py-1.5 text-xs last:border-0">
                 {j.status === "running" && <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />}
                 {j.status === "done" && <span className="text-amber-500">✓</span>}

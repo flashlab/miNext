@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { PluginRegistry } from "./plugins/registry";
 import type { Indexer } from "./library/indexer";
+import { emitJobs } from "./sync";
 
 export interface DownloadJob {
   id: number;
@@ -29,6 +30,7 @@ export function clearJobs(): number {
   const removed = jobs.length - kept.length;
   jobs.length = 0;
   jobs.push(...kept);
+  emitJobs(listJobs());
   return removed;
 }
 
@@ -68,6 +70,7 @@ export function startDownload(
     : (req.meta?.title || req.url || req.id || "下载");
   const job: DownloadJob = { id: nextId++, label, dir: req.dir, status: "running", createdAt: Date.now() };
   jobs.push(job);
+  emitJobs(listJobs());
   void (async () => {
     try {
       if (!dirsContain(req.dir)) throw new Error("目标目录不在曲库路径内(含子目录)");
@@ -97,6 +100,7 @@ export function startDownload(
       job.error = String((e as Error).message || e);
     } finally {
       job.finishedAt = Date.now();
+      emitJobs(listJobs());
     }
   })();
   return job;

@@ -16,7 +16,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, MoreVertical, Pause, Play, SkipBack, SkipForward, Shuffle, ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
 import type { LoopMode, PlayerState, Song, Speaker } from "@/lib/types";
-import { usePoll } from "@/lib/usePoll";
+import { useLive } from "@/lib/sync";
 import { toast } from "sonner";
 
 const LOOP_LABEL: Record<LoopMode, string> = { off: "不循环", one: "单曲循环", all: "列表循环", random: "随机循环" };
@@ -71,7 +71,7 @@ function SortableRow(props: {
 }
 
 function PlayerCard({ speaker }: { speaker: Speaker }) {
-  const { data: state, reload } = usePoll(() => api.playerState(speaker.id), 3000, [speaker.id]);
+  const { data: state, reload } = useLive(() => api.playerState(speaker.id), { fallbackMs: 15_000, keys: [`player:${speaker.id}`], deps: [speaker.id] });
   const [localList, setLocalList] = useState<Song[]>([]);
   useEffect(() => { if (state) setLocalList(state.list); }, [state]);
 

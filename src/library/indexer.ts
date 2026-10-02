@@ -2,6 +2,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { basename, extname, dirname } from "node:path";
 import type { LibraryDb } from "./db";
+import { emitStats, emitInvalidate } from "../sync";
 
 interface FfprobeOut {
   format?: {
@@ -95,6 +96,7 @@ export class Indexer {
   async refresh(onProgress?: (done: number, total: number) => void): Promise<number> {
     if (this.refreshing) throw new Error("索引刷新进行中");
     this.refreshing = true;
+    emitStats({ total: this.db.count(), refreshing: true });
     try {
       const exts = new Set(this.extensions.map((e) => e.toLowerCase()));
       const existing = this.db.allPathsMtime();
@@ -159,6 +161,8 @@ export class Indexer {
       return this.db.count();
     } finally {
       this.refreshing = false;
+      emitStats({ total: this.db.count(), refreshing: false });
+      emitInvalidate("library"); // 曲库内容可能已变(新增/清理)
     }
   }
 }

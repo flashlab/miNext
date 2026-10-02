@@ -13,6 +13,8 @@ export interface DlPreviewState {
   untilTs: number; // 0=时长未知,保持到停止;>0 到点后惰性过期
 }
 
+import { emitPreview } from "./sync";
+
 let state: DlPreviewState | null = null;
 
 export function getPreview(): DlPreviewState | null {
@@ -32,6 +34,7 @@ export function setPreview(p: {
     startedAt: now,
     untilTs: p.duration && p.duration > 0 ? now + (p.duration + 2) * 1000 : 0,
   };
+  emitPreview(state);
   return state;
 }
 
@@ -41,5 +44,6 @@ export function clearPreview(instance?: string): DlPreviewState | null {
   if (!cur) return null;
   if (instance && cur.instance !== instance) return null;
   state = null;
+  emitPreview(null);
   return cur;
 }

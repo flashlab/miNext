@@ -10,6 +10,7 @@ import type {
 } from "./types";
 import { encodeRequest, parseAppMessage } from "./types";
 import { clearPreview } from "../dlPreview";
+import { emitSpeaker } from "../sync";
 
 export interface SpeakerLinkHandlers {
   /** ASR 最终文本 */
@@ -93,6 +94,7 @@ export class SpeakerLink {
     this.online = true;
     this.lastEventAt = Date.now();
     this.lastIp = ws.remoteAddress ?? "";
+    emitSpeaker(this.id, { online: true, lastIp: this.lastIp, lastEventAt: this.lastEventAt });
     this.handlers.onConnect?.();
   }
 
@@ -100,6 +102,7 @@ export class SpeakerLink {
     if (this.ws !== ws) return; // 旧连接的 close 不影响新连接
     this.ws = null;
     this.online = false;
+    emitSpeaker(this.id, { online: false });
     this.handlers.onDisconnect?.();
   }
 
@@ -154,6 +157,7 @@ export class SpeakerLink {
       const s = data as "Playing" | "Paused" | "Idle";
       if (s === "Playing" || s === "Paused" || s === "Idle") {
         this.playing = s;
+        emitSpeaker(this.id, { playing: s }); // 设备侧"变化即推",浏览器即时可见
         this.handlers.onPlaying?.(s);
       }
     }
