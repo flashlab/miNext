@@ -91,14 +91,19 @@ function NativeVoiceButton({ speaker, onChanged }: { speaker: Speaker; onChanged
   );
 }
 
-/** 禁用麦克风:pnshelper 原语开关,状态读音箱真实值(与物理静音键同步) */
+/** 禁用麦克风:走音箱自带 pns 封装(含 LED/提示音),状态读音箱真实值(与物理静音键同步) */
 function MicButton({ speaker, onChanged }: { speaker: Speaker; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const muted = speaker.micMuted === true;
   const click = () => {
     setBusy(true);
     api.toolMic(speaker.id, !muted)
-      .then((r) => { toast.success(r.micMuted ? "麦克风已禁用" : "麦克风已恢复"); onChanged(); })
+      .then((r) => {
+        const msg = r.micMuted ? "麦克风已禁用" : "麦克风已恢复";
+        if (r.micMuted === !muted) toast.success(msg);
+        else toast.error(`操作未生效,当前${r.micMuted ? "已禁用" : "未禁用"}`);
+        onChanged();
+      })
       .catch((e) => toast.error(String(e)))
       .finally(() => setBusy(false));
   };

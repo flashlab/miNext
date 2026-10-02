@@ -250,13 +250,15 @@ export class SpeakerLink {
     return this.runShell("mphelper play");
   }
 
-  /** 麦克风开关(open-xiaoai client-rust 原语,真机待验证) */
+  /** 麦克风开关:走音箱自带封装 /etc/init.d/pns mic_off|mic_on
+   *  (含 LED 指示 + 提示音,与物理静音键同路径;底层事件语义 event7=静音、event8=解除,
+   *   与 open-xiaoai client 的命名相反——以设备 /etc/init.d/pns 脚本为准) */
   async micOff() {
-    return this.runShell(`ubus -t1 -S call pnshelper event_notify '{"src":3, "event":8}' 2>&1`);
+    return this.runShell("/etc/init.d/pns mic_off");
   }
 
   async micOn() {
-    return this.runShell(`ubus -t1 -S call pnshelper event_notify '{"src":3, "event":7}' 2>&1`);
+    return this.runShell("/etc/init.d/pns mic_on");
   }
 
   /** 读麦克风真实状态:/tmp/mipns/mute 存在 = 静音 */
