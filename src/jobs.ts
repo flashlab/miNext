@@ -23,6 +23,15 @@ export function listJobs(): DownloadJob[] {
   return [...jobs].sort((a, b) => b.id - a.id).slice(0, 50);
 }
 
+/** 清空已结束的任务(done/failed),running 保留;返回清掉的条数 */
+export function clearJobs(): number {
+  const kept = jobs.filter((j) => j.status === "running");
+  const removed = jobs.length - kept.length;
+  jobs.length = 0;
+  jobs.push(...kept);
+  return removed;
+}
+
 function sanitize(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim() || "untitled";
 }

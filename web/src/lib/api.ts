@@ -59,6 +59,7 @@ export const api = {
   play: (id: string, body: { paths?: string[]; keyword?: string }) => post(`/api/player/${id}/play`, body),
   append: (id: string, paths: string[]) => post(`/api/player/${id}/append`, { paths }),
   toggle: (id: string) => post<{ ok: boolean; result: string }>(`/api/player/${id}/toggle`),
+  stop: (id: string) => post(`/api/player/${id}/stop`),
   playerAction: (id: string, action: "next" | "prev" | "random") => post(`/api/player/${id}/${action}`),
   setLoop: (id: string, mode: LoopMode) => post(`/api/player/${id}/loop`, { mode }),
   setVolume: (id: string, volume: number) => post(`/api/player/${id}/volume`, { volume }),
@@ -69,6 +70,11 @@ export const api = {
   toolSay: (id: string, text: string) => post<{ ok: boolean; stdout: string }>(`/api/tools/${id}/say`, { text }),
   toolAsk: (id: string, text: string) => post<{ ok: boolean; stdout: string }>(`/api/tools/${id}/ask`, { text }),
   toolPlayUrl: (id: string, url: string) => post<{ ok: boolean; stdout: string }>(`/api/tools/${id}/play-url`, { url }),
+  toolPause: (id: string) => post<{ ok: boolean; stdout: string }>(`/api/tools/${id}/pause`),
+  toolNativeVoice: (id: string, on: boolean) =>
+    post<{ ok: boolean; nativeVoiceDisabledUntil: number | null }>(`/api/tools/${id}/native-voice`, { on }),
+  toolMic: (id: string, muted: boolean) =>
+    post<{ ok: boolean; micMuted: boolean | null }>(`/api/tools/${id}/mic`, { muted }),
   toolShell: (id: string, script: string) =>
     post<{ ok: boolean; stdout: string; stderr: string }>(`/api/tools/${id}/shell`, { script }),
 
@@ -86,6 +92,7 @@ export const api = {
   dlResolve: (source: string, id: string, meta?: { title?: string; artist?: string; album?: string }) =>
     post<{ ok: boolean; fileUrl: string }>("/api/dl/resolve", { source, id, meta }),
   dlJobs: () => req<{ jobs: DlJob[] }>("/api/dl/jobs"),
+  dlClearJobs: () => req<{ ok: boolean; removed: number }>("/api/dl/jobs", { method: "DELETE" }),
 
   // ---- lx 自定义源:上传替换/恢复默认(服务端热重载,无需重启) ----
   lxSourceUpload: (code: string) =>

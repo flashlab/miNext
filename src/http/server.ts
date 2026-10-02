@@ -6,7 +6,7 @@ import type { SearchSemantics } from "../library/search";
 import type { SpeakerRegistry } from "../registry";
 import type { PluginRegistry } from "../plugins/registry";
 import { deleteOverrideSource, writeOverrideSource } from "../plugins/lxhost";
-import { listJobs, startDownload } from "../jobs";
+import { listJobs, clearJobs, startDownload } from "../jobs";
 import type { LoopMode } from "../player/engine";
 import { rename, unlink, mkdir, rmdir } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
@@ -103,6 +103,7 @@ export function createHttpServer(deps: HttpDeps) {
             "chksz.apiKey": db.getSetting("shared.chksz.apiKey") ?? "",
             "ynx.apiKey": db.getSetting("shared.ynx.apiKey") ?? "",
             "dl.dir": db.getSetting("shared.dl.dir") ?? "",
+            "dl.preview": db.getSetting("shared.dl.preview") ?? "",
           },
         });
       }
@@ -180,6 +181,10 @@ export function createHttpServer(deps: HttpDeps) {
       if (parts[1] === "jobs" && method === "GET") {
         return json({ jobs: listJobs() });
       }
+      // 清理已结束的任务(done/failed),running 保留
+      if (parts[1] === "jobs" && method === "DELETE") {
+        return json({ ok: true, removed: clearJobs() });
+      }
       // 试听:以最低音质解析直链(不下载)
       if (parts[1] === "resolve" && method === "POST") {
         const body = (await req.json()) as { source?: string; id?: string; meta?: { title?: string; artist?: string; album?: string } };
@@ -201,24 +206,33 @@ export function createHttpServer(deps: HttpDeps) {
     if (parts[0] === "speakers") {
       if (parts.length === 1) {
         if (method === "GET") {
-          return json(await Promise.all(registry.all().map(async (rt) => ({
-            id: rt.row.id,
-            name: rt.row.name,
-            wsPort: rt.row.ws_port,
-            commands: JSON.parse(rt.row.commands || "{}"),
-            hidden: Boolean(rt.row.hidden),
-            token: rt.row.token,
-            lastIp: rt.link.lastIp || rt.row.last_ip || "",
-            online: rt.link.online,
-            lastEventAt: rt.link.lastEventAt || null,
-            playing: rt.link.playing,
-            device: rt.link.deviceInfo,
-            player: {
-              loop: rt.engine.loop,
-              current: rt.engine.current,
-              queueLength: (await rt.engine.snapshot()).list.length,
-            },
-          }))));
+          return json(await Promise.all(registry.all().map(async (rt) => {
+            // 麦克风真实状态:在线时读音箱 /tmp/mipns/mute(3s 轮询一次,与物理静音键同步)
+            let micMuted: boolean | null = null;
+            if (rt.link.online) {
+              try { micMuted = (await rt.link.getMicStatus()) === "off"; } catch { micMuted = null; }
+            }
+            return {
+              id: rt.row.id,
+              name: rt.row.name,
+              wsPort: rt.row.ws_port,
+              commands: JSON.parse(rt.row.commands || "{}"),
+              hidden: Boolean(rt.row.hidden),
+              token: rt.row.token,
+              lastIp: rt.link.lastIp || rt.row.last_ip || "",
+              online: rt.link.online,
+              lastEventAt: rt.link.lastEventAt || null,
+              playing: rt.link.playing,
+              device: rt.link.deviceInfo,
+              micMuted,
+              nativeVoiceDisabledUntil: rt.engine.nativeVoiceDisabled ? rt.engine.nativeVoiceDisabledUntil : null,
+              player: {
+                loop: rt.engine.loop,
+                current: rt.engine.current,
+                queueLength: (await rt.engine.snapshot()).list.length,
+              },
+            };
+          })));
         }
         if (method === "POST") {
           const body = (await req.json()) as { wsPort?: number; name?: string; commands?: Record<string, string[]>; token?: string };
@@ -553,6 +567,8 @@ export function createHttpServer(deps: HttpDeps) {
         return json({ ok: true });
       }
       if (action === "toggle" && method === "POST") return json({ ok: true, result: await engine.toggle() });
+      // 停止(保留列表):试听落音箱前用它压掉队列播放与自动续播定时器
+      if (action === "stop" && method === "POST") { await engine.stop(); return json({ ok: true }); }
       if (action === "random" && method === "POST") { void voice.playRandom(); return json({ ok: true }); }
       if (action === "next" && method === "POST") { void engine.next(); return json({ ok: true }); }
       if (action === "prev" && method === "POST") { void engine.prev(); return json({ ok: true }); }
@@ -590,6 +606,29 @@ export function createHttpServer(deps: HttpDeps) {
         if (!script) return err("缺少 script");
         const r = await link.runShell(script, 15_000);
         return json({ ok: r.exit_code === 0, ...r });
+      }
+      // 暂停(试听停止用,直接 mphelper pause,不动播放列表)
+      if (action === "pause" && method === "POST") {
+        const r = await link.pausePlayback();
+        return json({ ok: shellOk(r), stdout: r.stdout });
+      }
+      // 禁用原生语音:on=true → 拦截窗口延长到 5 分钟;on=false → 立即解除(与 20s 临时武装窗口相互独立)
+      if (action === "native-voice" && method === "POST") {
+        const { on } = (await req.json()) as { on?: boolean };
+        if (typeof on !== "boolean") return err("缺少 on");
+        const until = on ? Date.now() + 300_000 : 0;
+        rt.engine.setNativeVoiceDisabled(until);
+        return json({ ok: true, nativeVoiceDisabledUntil: until || null });
+      }
+      // 麦克风开关:pnshelper event 8=关 / 7=开,返回执行后的真实状态
+      if (action === "mic" && method === "POST") {
+        const { muted } = (await req.json()) as { muted?: boolean };
+        if (typeof muted !== "boolean") return err("缺少 muted");
+        if (!link.online) return err(`音箱 ${id} 不在线`, 502);
+        const r = muted ? await link.micOff() : await link.micOn();
+        if (!shellOk(r)) return err(r.stdout.slice(0, 200) || "执行失败", 502);
+        const status = await link.getMicStatus().catch(() => null);
+        return json({ ok: true, micMuted: status === "off" ? true : status === "on" ? false : null });
       }
       return err("unknown tools action", 404);
     }

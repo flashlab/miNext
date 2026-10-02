@@ -27,7 +27,7 @@ export class VoicePipeline {
   attach() {
     this.link.setHandlers({
       onInstructionText: (text) => void this.dispatch(text),
-      onSpeakEvent: () => this.engine.onSpeakEvent(),
+      onSpeakEvent: (text) => this.engine.onSpeakEvent(text),
       onConnect: () => {
         console.log(`[${this.link.id}] 音箱已连接`);
         void this.link.probeDeviceInfo();

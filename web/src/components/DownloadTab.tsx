@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,11 +12,12 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import { api, fmtDuration } from "@/lib/api";
-import type { DirsInfo, DlResult, PluginView } from "@/lib/types";
+import type { DirsInfo, DlResult, PluginView, Speaker } from "@/lib/types";
 import { DirTreePicker } from "@/components/DirTreePicker";
 import { usePoll } from "@/lib/usePoll";
 import { toast } from "sonner";
-import { ChevronDown, Download, Loader2, Pause, Play, Settings } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Download, Loader2, Pause, Play, Settings, Trash2 } from "lucide-react";
+import coverDefault from "@/assets/cover_default.svg";
 
 const SOURCE_NAMES: Record<string, string> = { kw: "酷我", wy: "网易云", tx: "QQ音乐", kg: "酷狗", bili: "哔哩哔哩", yt: "YouTube", url: "直链" };
 
@@ -172,30 +173,73 @@ function PluginSettingsDialog({ plugin, shared, sharedDir, onChanged }: {
   );
 }
 
-/** 试听状态:全局单 Audio 实例 */
-function usePreview() {
+type SortField = "title" | "artist" | "album" | "source" | "duration";
+const collator = new Intl.Collator("zh-Hans-CN");
+
+function SortHead({ label, field, sort, order, onSort, align = "left" }: {
+  label: string; field: SortField; sort: SortField | ""; order: "asc" | "desc";
+  onSort: (f: SortField) => void; align?: "left" | "right";
+}) {
+  const active = sort === field;
+  return (
+    <button
+      className={`flex w-full items-center gap-0.5 text-xs hover:text-foreground ${align === "right" ? "justify-end" : ""}`}
+      onClick={() => onSort(field)}
+    >
+      {label}
+      {active && (order === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
+    </button>
+  );
+}
+
+/** 试听:本地=浏览器 Audio;实例=直链落音箱(先 engine.stop 压掉自动续播定时器,不进入播放列表) */
+function usePreview(targetId: string) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playingOnRef = useRef<{ kind: "local" } | { kind: "speaker"; id: string } | null>(null);
   const [previewKey, setPreviewKey] = useState("");
   const [loading, setLoading] = useState("");
 
+  const clearTimer = () => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+  };
+
+  /** 按实际播放位置停掉当前试听 */
+  const stopCurrent = async () => {
+    clearTimer();
+    const on = playingOnRef.current;
+    playingOnRef.current = null;
+    setPreviewKey("");
+    if (on?.kind === "speaker") await api.toolPause(on.id).catch(() => {});
+    else if (on?.kind === "local") { audioRef.current?.pause(); audioRef.current = null; }
+  };
+
   const toggle = async (r: DlResult) => {
     const key = `${r.source}:${r.id}`;
-    if (previewKey === key) {
-      audioRef.current?.pause();
-      audioRef.current = null;
-      setPreviewKey("");
-      return;
-    }
+    if (previewKey === key) { await stopCurrent(); return; }
     setLoading(key);
     try {
       const d = await api.dlResolve(r.source, r.id, { title: r.title, artist: r.artist, album: r.album });
-      audioRef.current?.pause();
-      const a = new Audio(d.fileUrl);
-      a.onended = () => setPreviewKey("");
-      a.onerror = () => { setPreviewKey(""); toast.error("试听播放失败"); };
-      audioRef.current = a;
-      await a.play();
-      setPreviewKey(key);
+      await stopCurrent(); // 换曲/换目标:先停上一条(与本地试听语义一致)
+      if (!targetId) {
+        const a = new Audio(d.fileUrl);
+        a.onended = () => { setPreviewKey(""); playingOnRef.current = null; };
+        a.onerror = () => { setPreviewKey(""); playingOnRef.current = null; toast.error("试听播放失败"); };
+        audioRef.current = a;
+        playingOnRef.current = { kind: "local" };
+        await a.play();
+        setPreviewKey(key);
+      } else {
+        await api.stop(targetId); // 暂停队列播放并取消自动续播定时器(列表与位置保留)
+        await api.toolPlayUrl(targetId, d.fileUrl);
+        playingOnRef.current = { kind: "speaker", id: targetId };
+        setPreviewKey(key);
+        clearTimer();
+        if (r.duration && r.duration > 0) {
+          // 音箱模式没有 ended 回调,按时长 + 缓冲复位播放中标记
+          timerRef.current = setTimeout(() => { playingOnRef.current = null; setPreviewKey(""); }, (r.duration + 2) * 1000);
+        }
+      }
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -205,15 +249,16 @@ function usePreview() {
   return { previewKey, loading, toggle };
 }
 
-export function DownloadTab() {
+export function DownloadTab({ speakers }: { speakers: Speaker[] }) {
   const { data: pluginData, reload: reloadPlugins } = usePoll(() => api.plugins(), 30000);
   const { data: dirs } = usePoll<DirsInfo>(() => api.dirs(), 60000);
   const { data: jobsData, reload: reloadJobs } = usePoll(() => api.dlJobs(), 3000);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<DlResult[]>([]);
-  const [errors, setErrors] = useState<{ source: string; error: string }[]>([]);
   const [searching, setSearching] = useState(false);
-  const preview = usePreview();
+  const [sort, setSort] = useState<SortField | "">("");
+  const [order, setOrder] = useState<"asc" | "desc">("asc");
+  const [previewLocal, setPreviewLocal] = useState<string | null>(null);
 
   const plugins = pluginData?.plugins ?? [];
   const shared = pluginData?.shared ?? {};
@@ -221,11 +266,28 @@ export function DownloadTab() {
     plugins.find((p) => p.kind === "download" && p.sources.some((s) => s.id === source && s.enabled));
   const sharedDir = shared["dl.dir"] || dirs?.defaultDir || dirs?.dirs[0] || "";
 
+  // 试听播放方式(共享设置):所选实例被隐藏/删除 → 静默回退本地播放
+  const visibleSpeakers = speakers.filter((s) => !s.hidden);
+  const savedPreview = shared["dl.preview"] ?? "";
+  const previewTarget = previewLocal ?? (visibleSpeakers.some((s) => s.id === savedPreview) ? savedPreview : "");
+  const preview = usePreview(previewTarget);
+
+  const setPreviewTarget = (id: string) => {
+    setPreviewLocal(id);
+    api.saveShared("dl.preview", id)
+      .then(() => reloadPlugins())
+      .catch((e) => { toast.error(String(e)); setPreviewLocal(null); })
+      .finally(() => setPreviewLocal(null));
+  };
+
   const search = () => {
     if (!q.trim()) return;
     setSearching(true);
     api.dlSearch(q.trim())
-      .then((d) => { setResults(d.results); setErrors(d.errors); })
+      .then((d) => {
+        setResults(d.results);
+        for (const e of d.errors) toast.error(`${SOURCE_NAMES[e.source] ?? e.source}:${e.error}`);
+      })
       .catch((e) => toast.error(String(e)))
       .finally(() => setSearching(false));
   };
@@ -238,6 +300,32 @@ export function DownloadTab() {
       .then(() => { toast.success(`已开始下载(${quality || "默认音质"})`); reloadJobs(); })
       .catch((e) => toast.error(String(e)));
   };
+
+  const onSort = (f: SortField) => {
+    if (sort === f) setOrder(order === "asc" ? "desc" : "asc");
+    else setSort(f);
+  };
+
+  const sorted = useMemo(() => {
+    if (!sort) return results;
+    const dir = order === "asc" ? 1 : -1;
+    const val = (r: DlResult): string => {
+      if (sort === "source") return SOURCE_NAMES[r.source] ?? r.source;
+      if (sort === "duration") return "";
+      return r[sort] ?? "";
+    };
+    return [...results].sort((a, b) => {
+      if (sort === "duration") {
+        const av = a.duration ?? null, bv = b.duration ?? null;
+        if (av === null || bv === null) {
+          if (av === null && bv === null) return 0;
+          return av === null ? 1 : -1; // 缺失排最后(与升降序无关)
+        }
+        return dir * (av - bv);
+      }
+      return dir * collator.compare(val(a), val(b));
+    });
+  }, [results, sort, order]);
 
   return (
     <div className="space-y-4">
@@ -279,6 +367,26 @@ export function DownloadTab() {
           api.saveShared("dl.dir", p).then(() => { toast.success("下载目录已更新"); reloadPlugins(); }).catch((e) => toast.error(String(e)));
         }} />
       </div>
+
+      {/* 试听播放方式:本地或未隐藏实例;直链播放,不影响播放列表 */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Label className="shrink-0 text-xs text-muted-foreground">试听播放方式</Label>
+        <button type="button" onClick={() => setPreviewTarget("")}
+          className={`h-7 whitespace-nowrap rounded border px-2 text-xs ${previewTarget === ""
+            ? "border-amber-500/60 bg-transparent text-amber-500"
+            : "border-border bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+          本地播放
+        </button>
+        {visibleSpeakers.map((s) => (
+          <button key={s.id} type="button" onClick={() => setPreviewTarget(s.id)}
+            className={`h-7 whitespace-nowrap rounded border px-2 text-xs ${previewTarget === s.id
+              ? "border-amber-500/60 bg-transparent text-amber-500"
+              : "border-border bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+            {s.name}
+          </button>
+        ))}
+      </div>
+
       {/* 搜索 */}
       <div className="flex flex-wrap gap-1.5">
         <Input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()}
@@ -289,30 +397,22 @@ export function DownloadTab() {
         </Button>
       </div>
 
-      {errors.length > 0 && (
-        <div className="space-y-0.5">
-          {errors.map((e, i) => (
-            <p key={i} className="text-[11px] text-red-500">{SOURCE_NAMES[e.source] ?? e.source}: {e.error}</p>
-          ))}
-        </div>
-      )}
-
       {results.length > 0 && (
         <div className="overflow-x-auto rounded border border-border">
           <table className="w-full min-w-[560px]">
             <thead>
               <tr className="border-b border-border text-left text-xs text-muted-foreground">
                 <th className="w-10 px-2 py-2"></th>
-                <th className="px-2 py-2">歌名</th>
-                <th className="px-2 py-2">歌手</th>
-                <th className="hidden px-2 py-2 sm:table-cell">专辑</th>
-                <th className="px-2 py-2">源</th>
-                <th className="w-14 px-2 py-2 text-right">时长</th>
+                <th className="px-2 py-2"><SortHead label="歌名" field="title" sort={sort} order={order} onSort={onSort} /></th>
                 <th className="w-20 px-2 py-2"></th>
+                <th className="px-2 py-2"><SortHead label="歌手" field="artist" sort={sort} order={order} onSort={onSort} /></th>
+                <th className="hidden px-2 py-2 sm:table-cell"><SortHead label="专辑" field="album" sort={sort} order={order} onSort={onSort} /></th>
+                <th className="px-2 py-2"><SortHead label="源" field="source" sort={sort} order={order} onSort={onSort} /></th>
+                <th className="w-14 px-2 py-2"><SortHead label="时长" field="duration" sort={sort} order={order} onSort={onSort} align="right" /></th>
               </tr>
             </thead>
             <tbody>
-              {results.map((r, i) => {
+              {sorted.map((r, i) => {
                 const key = `${r.source}:${r.id}`;
                 const isPreviewing = preview.previewKey === key;
                 const isLoading = preview.loading === key;
@@ -324,12 +424,22 @@ export function DownloadTab() {
                     <td className="px-2 py-1.5">
                       <button
                         className="group relative block h-7 w-7 overflow-hidden rounded"
-                        title={isPreviewing ? "停止试听" : "试听(最低音质)"}
-                        onClick={() => preview.toggle(r)}
+                        title={isPreviewing ? "停止试听" : `试听(最低音质)${previewTarget ? " · 音箱" : ""}`}
+                        onClick={() => void preview.toggle(r)}
                       >
-                        {r.cover
-                          ? <img src={r.cover} loading="lazy" referrerPolicy="no-referrer" className="h-7 w-7 object-cover" alt="" />
-                          : <div className="h-7 w-7 bg-muted" />}
+                        <img
+                          src={r.cover || coverDefault}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          className="h-7 w-7 object-cover"
+                          alt=""
+                          onError={(e) => {
+                            const el = e.currentTarget;
+                            if (el.dataset.fb) return;
+                            el.dataset.fb = "1";
+                            el.src = coverDefault;
+                          }}
+                        />
                         <span className={`absolute inset-0 flex items-center justify-center bg-black/50 text-white transition-opacity ${
                           isPreviewing || isLoading ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
                           {isLoading
@@ -339,18 +449,12 @@ export function DownloadTab() {
                       </button>
                     </td>
                     <td className="max-w-44 truncate px-2 py-1.5 text-xs text-foreground">{r.title}</td>
-                    <td className="max-w-24 truncate px-2 py-1.5 text-xs text-muted-foreground">{r.artist || "—"}</td>
-                    <td className="hidden max-w-28 truncate px-2 py-1.5 text-xs text-muted-foreground sm:table-cell">{r.album || "—"}</td>
-                    <td className="px-2 py-1.5">
-                      <Badge variant="outline" className="border-border text-[10px] text-muted-foreground">{SOURCE_NAMES[r.source] ?? r.source}</Badge>
-                    </td>
-                    <td className="px-2 py-1.5 text-right font-mono text-xs text-muted-foreground">{r.duration ? fmtDuration(r.duration) : "—"}</td>
                     <td className="px-2 py-1.5">
                       <DropdownMenu>
                         <DropdownMenuTrigger className="inline-flex h-6 items-center gap-0.5 rounded border border-border bg-transparent px-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground">
                           <Download className="h-3 w-3" /><ChevronDown className="h-3 w-3" />
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="min-w-28">
+                        <DropdownMenuContent align="start" className="min-w-28">
                           {(qualities.length ? qualities : [undefined]).map((qu) => (
                             <DropdownMenuItem key={qu ?? "default"} onClick={() => downloadWith(r, qu)}>
                               {qu ?? "默认音质"}
@@ -359,6 +463,12 @@ export function DownloadTab() {
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </td>
+                    <td className="max-w-24 truncate px-2 py-1.5 text-xs text-muted-foreground">{r.artist || "—"}</td>
+                    <td className="hidden max-w-28 truncate px-2 py-1.5 text-xs text-muted-foreground sm:table-cell">{r.album || "—"}</td>
+                    <td className="px-2 py-1.5">
+                      <Badge variant="outline" className="border-border text-[10px] text-muted-foreground">{SOURCE_NAMES[r.source] ?? r.source}</Badge>
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono text-xs text-muted-foreground">{r.duration ? fmtDuration(r.duration) : "—"}</td>
                   </tr>
                 );
               })}
@@ -367,10 +477,24 @@ export function DownloadTab() {
         </div>
       )}
 
-      {/* 任务列表 */}
+      {/* 任务列表:右端清理已结束任务 */}
       {(jobsData?.jobs.length ?? 0) > 0 && (
         <div className="space-y-1">
-          <Label className="text-xs text-muted-foreground">下载任务 · 保存到 <span className="font-mono">{sharedDir}</span></Label>
+          <div className="flex items-center gap-1.5">
+            <Label className="text-xs text-muted-foreground">下载任务 · 保存到 <span className="font-mono">{sharedDir}</span></Label>
+            <button
+              type="button"
+              title="清理已结束任务"
+              className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={() => {
+                api.dlClearJobs()
+                  .then((r) => { toast.success(r.removed > 0 ? `已清理 ${r.removed} 条已结束任务` : "没有可清理的任务"); reloadJobs(); })
+                  .catch((e) => toast.error(String(e)));
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
           <div className="rounded border border-border">
             {jobsData!.jobs.map((j) => (
               <div key={j.id} className="flex items-center gap-2 border-b border-border/60 px-2 py-1.5 text-xs last:border-0">

@@ -56,6 +56,8 @@ export interface Speaker {
   lastEventAt: number | null;
   playing: PlayingStatus;
   device: { model?: string; sn?: string };
+  micMuted: boolean | null; // 麦克风真实状态(null=离线未知)
+  nativeVoiceDisabledUntil: number | null; // 原生语音禁用到期时间戳
   player: { loop: LoopMode; current: Song | null; queueLength: number };
 }
 

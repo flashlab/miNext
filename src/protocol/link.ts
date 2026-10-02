@@ -13,8 +13,8 @@ import { encodeRequest, parseAppMessage } from "./types";
 export interface SpeakerLinkHandlers {
   /** ASR 最终文本 */
   onInstructionText?: (text: string) => void;
-  /** 小爱正在说话(SpeechSynthesizer/Speak 类事件) */
-  onSpeakEvent?: () => void;
+  /** 小爱正在说话(SpeechSynthesizer/Speak 类事件),带捕获到的文本(可能为空) */
+  onSpeakEvent?: (text?: string) => void;
   /** 捕获到小爱的回复文本 */
   onReplyText?: (text: string) => void;
   /** 播放状态变化 */
@@ -177,7 +177,7 @@ export class SpeakerLink {
     if (unique.length) this.handlers.onReplyText?.(unique[0]);
 
     if (ns.includes("speechsynthesizer") && name.includes("speak")) {
-      this.handlers.onSpeakEvent?.();
+      this.handlers.onSpeakEvent?.(unique[0]);
     }
   }
 
@@ -200,12 +200,35 @@ export class SpeakerLink {
   }
 
   private escapeShellSingleQuote(text: string) {
-    return text.replace(/'/g, `'\"'\"'`);
+    return text.replace(/'/g, `'"'"'`);
+  }
+
+  /** 自家 TTS 文本登记(用于区分小爱答复 vs 自家播报),只留最近 60s / 8 条 */
+  private ownTtsLog: { text: string; at: number }[] = [];
+
+  private static normTtsText(s: string): string {
+    return s.replace(/[\s，。！？、,.!?;；:：'"“”‘’…·\-—ー()()【】\[\]]/g, "");
+  }
+
+  /** Speak 事件文本是否来自自家 TTS(归一化后相等或互相包含) */
+  isRecentOwnTts(text: string | undefined): boolean {
+    if (!text) return false;
+    const now = Date.now();
+    this.ownTtsLog = this.ownTtsLog.filter((e) => now - e.at <= 60_000);
+    const n = SpeakerLink.normTtsText(text);
+    if (!n) return false;
+    return this.ownTtsLog.some((e) => {
+      const o = SpeakerLink.normTtsText(e.text);
+      return o.length > 1 && (o === n || o.includes(n) || n.includes(o));
+    });
   }
 
   /** ---- 音箱操作原语(全部经 run_shell) ---- */
 
   async speakText(text: string) {
+    const now = Date.now();
+    this.ownTtsLog.push({ text, at: now });
+    if (this.ownTtsLog.length > 8) this.ownTtsLog.splice(0, this.ownTtsLog.length - 8);
     return this.runShell(`/usr/sbin/tts_play.sh '${this.escapeShellSingleQuote(text)}'`);
   }
 
@@ -225,6 +248,23 @@ export class SpeakerLink {
 
   async resumePlayback() {
     return this.runShell("mphelper play");
+  }
+
+  /** 麦克风开关(open-xiaoai client-rust 原语,真机待验证) */
+  async micOff() {
+    return this.runShell(`ubus -t1 -S call pnshelper event_notify '{"src":3, "event":8}' 2>&1`);
+  }
+
+  async micOn() {
+    return this.runShell(`ubus -t1 -S call pnshelper event_notify '{"src":3, "event":7}' 2>&1`);
+  }
+
+  /** 读麦克风真实状态:/tmp/mipns/mute 存在 = 静音 */
+  async getMicStatus(): Promise<"on" | "off" | null> {
+    const r = await this.runShell("[ ! -f /tmp/mipns/mute ] && echo MIC_ON || echo MIC_OFF");
+    if (r.stdout.includes("MIC_OFF")) return "off";
+    if (r.stdout.includes("MIC_ON")) return "on";
+    return null;
   }
 
   async getPlayStatus(): Promise<"playing" | "paused" | "idle"> {

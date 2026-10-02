@@ -79,6 +79,20 @@ export class PlayerEngine {
     this.log(`reply interrupt armed: ${reason}`);
   }
 
+  /** 禁用原生语音窗口(到期时间戳 ms,0=未禁用):窗口内小爱的所有回答都被切断(自家 TTS 除外) */
+  nativeVoiceDisabledUntil = 0;
+
+  get nativeVoiceDisabled(): boolean {
+    return this.nativeVoiceDisabledUntil > Date.now();
+  }
+
+  setNativeVoiceDisabled(untilMs: number) {
+    this.nativeVoiceDisabledUntil = Math.max(0, Math.round(untilMs));
+    this.log(this.nativeVoiceDisabled
+      ? `native voice disabled until ${new Date(this.nativeVoiceDisabledUntil).toISOString()}`
+      : "native voice enabled");
+  }
+
   disarmReplyInterrupt(reason: string) {
     if (!this.replyInterruptArmed) return;
     this.replyInterruptArmed = false;
@@ -93,12 +107,15 @@ export class PlayerEngine {
     return true;
   }
 
-  onSpeakEvent() {
+  onSpeakEvent(text?: string) {
     const armed = this.isReplyInterruptArmed();
+    const native = this.nativeVoiceDisabled;
     const now = Date.now();
     const cooling = now - this.replyInterruptLastStopAt < this.cfg.replyInterruptCooldownSec * 1000;
-    this.log(`speak event: armed=${armed} cooling=${cooling}`);
-    if (!armed || cooling) return;
+    const own = this.link.isRecentOwnTts(text);
+    this.log(`speak event: armed=${armed} native=${native} cooling=${cooling} own=${own} text=${(text ?? "").slice(0, 40)}`);
+    if (own) return; // 自家 TTS 播报,不切
+    if ((!armed && !native) || cooling) return;
     this.replyInterruptLastStopAt = now;
     this.link.pausePlayback().catch(() => {});
   }
