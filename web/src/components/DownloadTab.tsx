@@ -199,6 +199,7 @@ function usePreview(targetId: string) {
   const playingOnRef = useRef<{ kind: "local" } | { kind: "speaker"; id: string } | null>(null);
   const [previewKey, setPreviewKey] = useState("");
   const [loading, setLoading] = useState("");
+  const flowRef = useRef(0); // 试听流程令牌:新一轮点击使旧流程作废
 
   const clearTimer = () => {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
@@ -216,10 +217,13 @@ function usePreview(targetId: string) {
 
   const toggle = async (r: DlResult) => {
     const key = `${r.source}:${r.id}`;
+    if (loading === key) return; // 解析中再点=忽略,防重复解析
     if (previewKey === key) { await stopCurrent(); return; }
+    const my = ++flowRef.current;
     setLoading(key);
     try {
       const d = await api.dlResolve(r.source, r.id, { title: r.title, artist: r.artist, album: r.album });
+      if (my !== flowRef.current) return; // 已被后续点击取代,丢弃本次结果
       await stopCurrent(); // 换曲/换目标:先停上一条(与本地试听语义一致)
       if (!targetId) {
         const a = new Audio(d.fileUrl);

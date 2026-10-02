@@ -301,12 +301,12 @@ export class PlayerEngine {
     });
   }
 
-  /** 停止(保留列表) */
-  async stop() {
+  /** 停止(保留列表);note=触发来源(如 web 客户端 IP),便于多端排查 */
+  async stop(note = "") {
     await this.withLock(async () => {
       this.cancelTimer();
       await this.link.pausePlayback().catch(() => {});
-      this.log("stop(保留列表)");
+      this.log(`stop(保留列表)${note ? ` (${note})` : ""}`);
     });
   }
 

@@ -90,7 +90,15 @@ export function createHttpServer(deps: HttpDeps) {
     return np === nd || np.startsWith(nd + "/");
   });
 
-  async function api(req: Request, url: URL): Promise<Response> {
+  /** 客户端地址(多标签页/多设备排查用) */
+  function clientIp(server: unknown, req: Request): string {
+    try {
+      const r = (server as { requestIP?: (req: Request) => { address?: string } | null }).requestIP?.(req);
+      return r?.address ?? "?";
+    } catch { return "?"; }
+  }
+
+  async function api(req: Request, url: URL, ip: string): Promise<Response> {
     const parts = url.pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
     const method = req.method;
 
@@ -192,6 +200,7 @@ export function createHttpServer(deps: HttpDeps) {
         const plugin = plugins.downloadPluginFor(body.source);
         if (!plugin) return err(`${plugins.sourceDisplayName(body.source ?? "")}未激活下载插件`, 404);
         const lowest = plugin.qualities?.[body.source]?.[0];
+        console.log(`[dl] resolve ${body.source} from ${ip}`);
         try {
           const r = await plugin.resolve({ source: body.source, id: body.id, quality: lowest, meta: body.meta }, plugins.ctx);
           return json({ ok: true, fileUrl: r.fileUrl });
@@ -568,7 +577,7 @@ export function createHttpServer(deps: HttpDeps) {
       }
       if (action === "toggle" && method === "POST") return json({ ok: true, result: await engine.toggle() });
       // 停止(保留列表):试听落音箱前用它压掉队列播放与自动续播定时器
-      if (action === "stop" && method === "POST") { await engine.stop(); return json({ ok: true }); }
+      if (action === "stop" && method === "POST") { await engine.stop(`web from ${ip}`); return json({ ok: true }); }
       if (action === "random" && method === "POST") { void voice.playRandom(); return json({ ok: true }); }
       if (action === "next" && method === "POST") { void engine.next(); return json({ ok: true }); }
       if (action === "prev" && method === "POST") { void engine.prev(); return json({ ok: true }); }
@@ -598,6 +607,7 @@ export function createHttpServer(deps: HttpDeps) {
       if (action === "play-url" && method === "POST") {
         const { url: u } = (await req.json()) as { url?: string };
         if (!u) return err("缺少 url");
+        console.log(`[${id}] play-url from ${ip}`);
         const r = await link.playUrl(u);
         return json({ ok: shellOk(r), stdout: r.stdout });
       }
@@ -609,6 +619,7 @@ export function createHttpServer(deps: HttpDeps) {
       }
       // 暂停(试听停止用,直接 mphelper pause,不动播放列表)
       if (action === "pause" && method === "POST") {
+        console.log(`[${id}] pause(试听停止) from ${ip}`);
         const r = await link.pausePlayback();
         return json({ ok: shellOk(r), stdout: r.stdout });
       }
@@ -640,10 +651,11 @@ export function createHttpServer(deps: HttpDeps) {
     port: cfg.httpPort,
     // 默认 idleTimeout 仅 10s:聚合搜索多源并发最坏 ~20s+,曾致请求被静默断连;放宽到 60s
     idleTimeout: 60,
-    async fetch(req) {
+    async fetch(req, server) {
       const url = new URL(req.url);
+      const ip = clientIp(server, req);
       try {
-        if (url.pathname.startsWith("/api/")) return await api(req, url);
+        if (url.pathname.startsWith("/api/")) return await api(req, url, ip);
 
         if (url.pathname.startsWith("/music/")) {
           const decoded = url.pathname.slice("/music".length).split("/").map(decodeURIComponent).join("/");
