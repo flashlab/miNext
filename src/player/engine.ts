@@ -35,6 +35,9 @@ export class PlayerEngine {
   private replyInterruptArmed = false;
   private replyInterruptArmedAt = 0;
   private replyInterruptLastStopAt = 0;
+  /** 最近一个"带文本" Speak 事件的归属(无文本伴生事件跟随它判定) */
+  private lastSpeakOwn = false;
+  private lastSpeakAt = 0;
   private whitelistResumeTimer: ReturnType<typeof setTimeout> | null = null;
   private whitelistResumeSeq = 0;
   private busy = false;
@@ -108,15 +111,25 @@ export class PlayerEngine {
   }
 
   onSpeakEvent(text?: string) {
+    const now = Date.now();
+    // 音箱每次播报都会发一对事件(带文本 + 紧随其后无文本):
+    // 无文本的伴生事件按"5s 内最近一个带文本事件的归属"判定,避免禁用期间切断自家 TTS
+    let own: boolean;
+    if (text) {
+      own = this.link.isRecentOwnTts(text);
+      this.lastSpeakOwn = own;
+      this.lastSpeakAt = now;
+    } else {
+      own = now - this.lastSpeakAt < 5000 ? this.lastSpeakOwn : false;
+    }
     const armed = this.isReplyInterruptArmed();
     const native = this.nativeVoiceDisabled;
-    const now = Date.now();
     const cooling = now - this.replyInterruptLastStopAt < this.cfg.replyInterruptCooldownSec * 1000;
-    const own = this.link.isRecentOwnTts(text);
     this.log(`speak event: armed=${armed} native=${native} cooling=${cooling} own=${own} text=${(text ?? "").slice(0, 40)}`);
     if (own) return; // 自家 TTS 播报,不切
     if ((!armed && !native) || cooling) return;
     this.replyInterruptLastStopAt = now;
+    this.log(`reply interrupt hit (armed=${armed} native=${native}): 切断回答 ${(text ?? "").slice(0, 30)}`);
     this.link.pausePlayback().catch(() => {});
   }
 
