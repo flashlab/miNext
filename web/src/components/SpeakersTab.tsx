@@ -190,8 +190,8 @@ export function fmtIp(ip: string): string {
 }
 
 function InstallHint({ port, token }: { port: string; token: string }) {
-  const host = window.location.hostname;
-  const wsUrl = `ws://${host}:${port || "<端口>"}${token ? `/ws/${token}` : ""}`;
+  // 不暴露当前访问地址(公网域名/内网 IP 都可能敏感),统一用占位符
+  const wsUrl = `ws://<ip/域名>:${port || "<端口>"}${token ? `/ws/${token}` : ""}`;
   const cmds = [
     "mkdir -p /data/open-xiaoai",
     `echo '${wsUrl}' > /data/open-xiaoai/server.txt`,
