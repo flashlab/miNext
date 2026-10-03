@@ -231,11 +231,30 @@ export class PlayerEngine {
   }
 
   /** 追加到列表尾部(不打断当前播放;若空闲则开始播) */
+  /** 追加到列表尾部。去重:同一曲目(path 相同)已存在时,先移出旧队列里的条目再追加到尾部,列表不出现重复 */
   async appendQueue(songs: SongRow[]) {
     await this.withLock(async () => {
       const wasEmpty = this.list.length === 0;
-      this.list.push(...songs);
-      if (wasEmpty && this.cursor === -1) {
+      const cur = this.current; // 追加前正在播的那首(其旧条目可能被本次去重移出)
+      // 批次内也去重:同 path 只保留一首
+      const seen = new Set<string>();
+      const batch = songs.filter((s) => (seen.has(s.path) ? false : (seen.add(s.path), true)));
+      const incoming = new Set(batch.map((s) => s.path));
+      if (incoming.size && this.list.some((s) => incoming.has(s.path))) {
+        this.list = this.list.filter((s) => !incoming.has(s.path)); // 移出旧条目(可能多条)
+        if (cur) {
+          this.cursor = this.list.findIndex((s) => s.path === cur.path); // 可能 -1,追加后再定位
+        } else if (this.cursor >= this.list.length) {
+          this.cursor = this.list.length - 1;
+        }
+      }
+      this.list.push(...batch);
+      if (cur) {
+        // 当前曲旧条目被移出后,新位置在追加段里 → cursor 跟随,否则 advance 会跳到别的歌
+        const ni = this.list.findIndex((s) => s.path === cur.path);
+        if (ni >= 0) this.cursor = ni;
+      }
+      if (wasEmpty && this.cursor === -1 && this.list.length) {
         this.cursor = 0;
         await this.startSong(this.list[0], "append auto play");
       }
