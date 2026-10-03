@@ -1,6 +1,7 @@
 // 播放引擎 v2:list + cursor 模型(列表即全部,已播项保留)
 // 循环模式 / 播完即停 / 音量 / 列表编辑不影响当前播放
 import type { SpeakerLink } from "../protocol/link";
+import { emitNotify } from "../sync";
 import type { SongRow } from "../library/db";
 
 export type LoopMode = "off" | "one" | "all" | "random";
@@ -162,6 +163,7 @@ export class PlayerEngine {
       await this.link.playUrl(url);
     } catch (e) {
       this.log(`播放失败(${song.filename}): ${e}`);
+      emitNotify("error", `无法播放「${song.filename}」`);
       return;
     }
     this.log(`start song: trigger=${trigger} name=${song.filename} duration=${song.duration_sec.toFixed(1)}s`);

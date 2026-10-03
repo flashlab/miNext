@@ -240,12 +240,19 @@ export class SpeakerLink {
 
   async askXiaoAi(text: string) {
     const payload = JSON.stringify({ tts: 1, nlp: 1, nlp_text: text });
-    return this.runShell(`ubus call mibrain ai_service '${payload}'`);
+    return this.runShell(`ubus call mibrain ai_service '${this.escapeShellSingleQuote(payload)}'`);
   }
 
+  /** 播放直链。注意:URL 里的单引号(文件名带撇号)必须先过 escapeShellSingleQuote,
+   *  否则设备 /bin/sh 会在此处报 syntax error 而 ubus 根本没被调用(旧版即"无声无报错"的根因)。
+   *  退出码非 0 一律抛错:调用方(engine)据此记录日志并向 UI 推提示。 */
   async playUrl(url: string) {
     const payload = JSON.stringify({ url, type: 1 });
-    return this.runShell(`ubus call mediaplayer player_play_url '${payload}'`);
+    const r = await this.runShell(`ubus call mediaplayer player_play_url '${this.escapeShellSingleQuote(payload)}'`);
+    if (r.exit_code !== 0) {
+      throw new Error(`play-url 失败(exit ${r.exit_code}): ${(r.stderr || r.stdout || "").trim().slice(0, 160)}`);
+    }
+    return r;
   }
 
   /** 暂停:音频静音即视作试听结束 → 顺带清共享试听态(单点收敛,任何暂停都不留幽灵态) */

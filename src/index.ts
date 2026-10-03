@@ -55,7 +55,8 @@ if (db.listSpeakers().length === 0 && cfg.speakers.length) {
 }
 
 const fileUrl = (path: string) =>
-  `http://${cfg.lanHost}:${cfg.httpPort}/music${path.split("/").map(encodeURIComponent).join("/")}`;
+  // encodeURIComponent 不转义 ' ! ( ) * —— 撇号会打断音箱端 shell 单引号(见 link.playUrl),这里先 %27 兜底
+  `http://${cfg.lanHost}:${cfg.httpPort}/music${path.split("/").map((s) => encodeURIComponent(s).replace(/'/g, "%27")).join("/")}`;
 
 const registry = new SpeakerRegistry({
   db,

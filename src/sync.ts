@@ -52,6 +52,8 @@ export const emitPlugins = (d: unknown) => broadcast("plugins", d);
 export const emitGlobal = (d: unknown) => broadcast("global", d);
 export const emitStats = (d: unknown) => broadcast("stats", d);
 export const emitInvalidate = (key: string) => broadcast("invalidate", key);
+/** 服务端发起的 UI 提示(如播放失败):前端映射为 toast */
+export const emitNotify = (level: "error" | "success", msg: string) => broadcast("notify", { level, msg });
 
 /** 心跳:25s 一 ping(防 Bun idleTimeout 60s 与 NAT 断流);浏览器回 pong 保活上行 */
 export function startHeartbeat(ms = 25_000) {

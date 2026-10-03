@@ -2,6 +2,7 @@
 // 约定:useSync 的选择器必须返回"稳定引用"(直接取 state 切片,勿在内部造对象),
 // 否则 useSyncExternalStore 会反复触发重渲染。
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { toast } from "sonner";
 import { api } from "./api";
 import type { DlJob, DlPreview, GlobalSettings, PluginView, Speaker } from "./types";
 
@@ -163,6 +164,12 @@ function handle(t: string, d0: unknown) {
     case "invalidate":
       fireInvalidate(String(d0));
       break;
+    case "notify": {
+      // 服务端发起的提示(如播放失败):直接弹 toast
+      const n = d0 as { level?: string; msg?: string };
+      if (n.msg) (n.level === "error" ? toast.error : toast.success)(n.msg);
+      break;
+    }
     case "ping":
       try {
         ws?.send('{"t":"pong"}'); // 保活上行(防 Bun idleTimeout 掐线)
