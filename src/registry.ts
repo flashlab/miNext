@@ -2,7 +2,7 @@
 import type { ServerWebSocket } from "bun";
 import { SpeakerLink } from "./protocol/link";
 import { PlayerEngine, type PlayerConfig } from "./player/engine";
-import { VoicePipeline } from "./player/voice";
+import { VoicePipeline, type DlActions } from "./player/voice";
 import type { CommandsConfig } from "./config";
 import type { LibraryDb, SpeakerRow } from "./library/db";
 import type { Indexer } from "./library/indexer";
@@ -24,6 +24,8 @@ export interface RegistryDeps {
   getSearchSem: () => SearchSemantics;
   maxResults: number;
   fileUrl: (path: string) => string;
+  /** 语音在线搜索/下载能力(依赖 plugins/jobs,由 index.ts 注入) */
+  dl: DlActions;
 }
 
 export class SpeakerRegistry {
@@ -50,7 +52,7 @@ export class SpeakerRegistry {
     const engine = new PlayerEngine(link, this.deps.playerCfg, this.deps.fileUrl, (m) =>
       console.log(`[${row.id}] ${m}`),
     );
-    const voice = new VoicePipeline(link, engine, this.deps.db, this.deps.indexer, commands, this.deps.getSearchSem());
+    const voice = new VoicePipeline(link, engine, this.deps.db, this.deps.indexer, commands, this.deps.getSearchSem(), this.deps.dl);
     voice.attach();
 
     const server = Bun.serve({

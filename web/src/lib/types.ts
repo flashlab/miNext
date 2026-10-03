@@ -29,6 +29,8 @@ export interface PlayerState {
   stopAfterCurrent: boolean;
   volume: number | null;
   playing: PlayingStatus;
+  /** 语音在线搜索试听队列(直链播放,不进曲库列表) */
+  urlQueue?: { index: number; total: number; title: string; artist: string; source: string; id: string; key: string } | null;
 }
 
 export interface SpeakerCommands {
@@ -39,6 +41,9 @@ export interface SpeakerCommands {
   refreshKeywords?: string[];
   randomPlayKeywords?: string[];
   continueKeywords?: string[];
+  searchKeywords?: string[];
+  downloadKeywords?: string[];
+  recentKeywords?: string[];
   deleteKeywords?: string[];
   undoDeleteKeywords?: string[];
   interruptWhitelistKeywords?: string[];

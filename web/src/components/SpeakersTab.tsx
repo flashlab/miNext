@@ -24,6 +24,8 @@ const COMMAND_FIELDS: { key: keyof SpeakerCommands; label: string; def: string }
   { key: "continueKeywords", label: "继续播放", def: "继续播放,继续" },
   { key: "deleteKeywords", label: "删除当前(回收站)", def: "删除当前,删除音乐" },
   { key: "undoDeleteKeywords", label: "撤销删除", def: "撤销删除,撤销" },
+  { key: "searchKeywords", label: "搜索关键词", def: "搜索歌曲" },
+  { key: "downloadKeywords", label: "下载关键词", def: "下载当前,下载音乐" },
   { key: "interruptWhitelistKeywords", label: "打断白名单(音量类)", def: "音量,声音,大点声,小点声,调大音量,调小音量,静音,取消静音" },
 ];
 
@@ -49,7 +51,10 @@ function GlobalSettingsDialog() {
     api.globalSettings()
       .then((g) => {
         setData(g);
-        setCmdForm(Object.fromEntries(COMMAND_FIELDS.map((f) => [f.key, (g.commands[f.key] ?? []).join(",")])));
+        setCmdForm({
+          ...Object.fromEntries(COMMAND_FIELDS.map((f) => [f.key, (g.commands[f.key] ?? []).join(",")])),
+          recentKeywords: (g.commands.recentKeywords ?? []).join(","),
+        });
         setExts(new Set(g.audioExtensions.map((e) => e.replace(/^\./, ""))));
         setMaxResults(String(g.search.maxResults));
         setArtistSeps(g.search.artistSeparators.join(","));
@@ -67,6 +72,8 @@ function GlobalSettingsDialog() {
       const v = parseCsv(cmdForm[f.key] ?? "");
       if (v.length) (commands as Record<string, string[]>)[f.key] = v;
     }
+    const recent = parseCsv(cmdForm.recentKeywords ?? "");
+    if (recent.length) commands.recentKeywords = recent;
     setBusy(true);
     api.saveGlobalSettings({
       commands,
@@ -125,7 +132,16 @@ function GlobalSettingsDialog() {
             </div>
             <Separator className="bg-border" />
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">语音搜索</Label>
+              <Label className="text-xs text-muted-foreground">本地语音搜索</Label>
+              <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2">
+                <Label className="text-right text-[11px] text-muted-foreground">最近曲目触发词</Label>
+                <Input
+                  value={cmdForm.recentKeywords ?? ""}
+                  placeholder="最近,最新"
+                  className="h-7 border-border bg-transparent text-xs"
+                  onChange={(e) => setCmdForm({ ...cmdForm, recentKeywords: e.target.value })}
+                />
+              </div>
               <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2">
                 <Label className="text-right text-[11px] text-muted-foreground">播放列表上限</Label>
                 <Input value={maxResults} onChange={(e) => setMaxResults(e.target.value)}
@@ -141,7 +157,7 @@ function GlobalSettingsDialog() {
                 <Input value={albumSeps} onChange={(e) => setAlbumSeps(e.target.value)} placeholder="专辑,中的"
                   className="h-7 border-border bg-transparent text-xs" />
               </div>
-              <p className="text-[11px] text-muted-foreground">如「周杰伦唱的晴天」按歌手限定;「叶惠美专辑晴天」按专辑限定。</p>
+              <p className="text-[11px] text-muted-foreground">如「周杰伦唱的晴天」按歌手限定;「叶惠美专辑晴天」按专辑限定;「最近五首」播最新添加 5 首(受播放列表上限限制)。</p>
             </div>
             <div className="flex justify-end pt-1">
               <Button size="sm" disabled={busy} className="h-7 bg-amber-500 text-xs text-zinc-950 hover:bg-amber-400" onClick={save}>

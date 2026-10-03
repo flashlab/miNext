@@ -17,6 +17,12 @@ export interface CommandsConfig {
   interruptWhitelistKeywords: string[];
   deleteKeywords: string[];
   undoDeleteKeywords: string[];
+  /** 在线搜索并顺序试听(前缀触发,后接搜索词) */
+  searchKeywords: string[];
+  /** 下载当前试听版本 */
+  downloadKeywords: string[];
+  /** 最近/最新添加的 N 首(前缀触发,可带数字) */
+  recentKeywords: string[];
 }
 
 export interface AppConfig {
@@ -51,5 +57,9 @@ export async function loadConfig(path = "minext.config.json"): Promise<AppConfig
   // 老配置文件补默认关键词(回收站删除/撤销)
   cfg.commands.deleteKeywords ??= ["删除当前", "删除音乐"];
   cfg.commands.undoDeleteKeywords ??= ["撤销删除", "撤销"];
+  // v1.9.0:语音在线搜索/下载当前试听/最近曲目(老配置文件补默认)
+  cfg.commands.searchKeywords ??= ["搜索歌曲"];
+  cfg.commands.downloadKeywords ??= ["下载当前", "下载音乐"];
+  cfg.commands.recentKeywords ??= ["最近", "最新"];
   return cfg;
 }

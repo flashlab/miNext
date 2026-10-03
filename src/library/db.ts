@@ -262,6 +262,11 @@ export class LibraryDb {
     ).all() as { album: string; artist: string; count: number }[];
   }
 
+  /** 最新添加的 N 首(按 ctime_ns = 文件创建/入库时间倒序,与本地页「时间」列一致) */
+  newest(limit: number): SongRow[] {
+    return this.search({ q: "", sort: "ctime", order: "desc", limit }).songs;
+  }
+
   randomPick(limit: number): SongRow[] {
     return this.db.query("SELECT * FROM songs WHERE deleted_at = 0 ORDER BY RANDOM() LIMIT ?").all(limit) as SongRow[];
   }

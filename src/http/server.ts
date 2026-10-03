@@ -206,30 +206,7 @@ export function createHttpServer(deps: HttpDeps) {
       if (parts[1] === "search" && method === "GET") {
         const q = url.searchParams.get("q")?.trim();
         if (!q) return err("缺少 q");
-        const view = plugins.view();
-        const searches: Promise<unknown[]>[] = [];
-        const claimed = new Set<string>(); // 运行时互斥:同平台注册序靠前者赢(保存时 409 拦截,这里兜遗留双开)
-        for (const p of plugins.searchPlugins()) {
-          for (const src of p.sources) {
-            const sv = view.find((v) => v.id === p.id)?.sources.find((s) => s.id === src.id);
-            if (!sv?.enabled) continue;
-            if (claimed.has(src.id)) { console.log(`[plugins] 音源 ${src.id} 已被排前的搜索插件接管,跳过 ${p.id}`); continue; }
-            claimed.add(src.id);
-            searches.push(
-              p.search(src.id, q, sv.limit ?? 20, plugins.ctx)
-                .then((r) => r as unknown[])
-                .catch((e: Error) => [{ __error: String(e?.message ?? e), __source: src.id }]),
-            );
-          }
-        }
-        const settled = await Promise.all(searches);
-        const results: unknown[] = [];
-        const errors: { source: string; error: string }[] = [];
-        for (const r of settled.flat() as Record<string, unknown>[]) {
-          if (r.__error) errors.push({ source: String(r.__source ?? "?"), error: String(r.__error) });
-          else results.push(r);
-        }
-        return json({ results, errors });
+        return json(await plugins.searchAll(q));
       }
       if (parts[1] === "download" && method === "POST") {
         const body = (await req.json()) as {
@@ -255,12 +232,9 @@ export function createHttpServer(deps: HttpDeps) {
       if (parts[1] === "resolve" && method === "POST") {
         const body = (await req.json()) as { source?: string; id?: string; meta?: { title?: string; artist?: string; album?: string } };
         if (!body.source || !body.id) return err("缺少 source/id");
-        const plugin = plugins.downloadPluginFor(body.source);
-        if (!plugin) return err(`${plugins.sourceDisplayName(body.source ?? "")}未激活下载插件`, 404);
-        const lowest = plugin.qualities?.[body.source]?.[0];
         console.log(`[dl] resolve ${body.source} from ${ip}`);
         try {
-          const r = await plugin.resolve({ source: body.source, id: body.id, quality: lowest, meta: body.meta }, plugins.ctx);
+          const r = await plugins.resolveLowest(body.source, body.id, body.meta);
           return json({ ok: true, fileUrl: r.fileUrl });
         } catch (e) {
           return err(String((e as Error).message || e), 502);
@@ -277,6 +251,7 @@ export function createHttpServer(deps: HttpDeps) {
           if (!body.key || !body.source || !body.id || !body.instance) return err("缺少 key/source/id/instance");
           const rt = registry.get(body.instance);
           if (!rt) return err(`未知音箱: ${body.instance}`, 404);
+          rt.engine.releaseUrlQueue("manual preview"); // 网页手动试听接管:避免语音试听队列的定时器把它顶掉
           const prev = getPreview();
           if (prev && prev.instance !== body.instance) {
             // 换实例起播:先停掉上一个实例,避免两台同时出声(实例已删则直接清态)
@@ -296,7 +271,10 @@ export function createHttpServer(deps: HttpDeps) {
           const p = getPreview();
           if (!p) return json({ ok: true, stopped: null });
           const prt = registry.get(p.instance);
-          if (prt) await prt.link.pausePlayback().catch(() => {});
+          if (prt) {
+            prt.engine.releaseUrlQueue("preview stop"); // 外部停止:清掉语音试听队列定时器,避免自动续播回放
+            await prt.link.pausePlayback().catch(() => {});
+          }
           clearPreview(); // 实例已删时钩子不会跑,这里兜底
           console.log(`[dl] preview stop ${p.key} on ${p.instance} from ${ip}`);
           return json({ ok: true, stopped: p.instance });

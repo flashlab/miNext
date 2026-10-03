@@ -3,9 +3,53 @@ import type { CommandsConfig } from "../config";
 import type { LibraryDb } from "../library/db";
 import type { Indexer } from "../library/indexer";
 import { searchByVoiceKeyword, isExactCommand, matchesAnyKeyword, extractPlayKeyword, type SearchSemantics } from "../library/search";
-import type { PlayerEngine } from "./engine";
+import type { PlayerEngine, UrlItem } from "./engine";
 import type { SpeakerLink } from "../protocol/link";
 import { emitSpeaker } from "../sync";
+import { getPreview } from "../dlPreview";
+
+/** 语音在线搜索/下载的宿主能力(由 index.ts 注入,依赖 plugins/jobs) */
+export interface DlActions {
+  /** 搜索并解析出最多 limit 个可用的试听直链(顺序与搜索结果一致,失败的跳过) */
+  searchResolve(query: string, limit: number): Promise<UrlItem[]>;
+  /** 把试听项加入下载队列(下载到默认下载目录);返回给用户播报的结果 */
+  download(item: { source: string; id: string; title?: string; artist?: string; url?: string }): Promise<string>;
+}
+
+/** 前缀关键词触发:命中则返回去掉关键词后的剩余文本(空串=只说了关键词),未命中返回 null */
+function extractAfterKeyword(text: string, keywords: string[]): string | null {
+  for (const k of keywords) {
+    if (!k || !text.startsWith(k)) continue;
+    return text.slice(k.length).replace(/^[的\s,]+/, "").trim();
+  }
+  return null;
+}
+
+/** 数量提取:阿拉伯数字或中文数字(五/十/二十/二十五…) */
+function parseCount(s: string): number | null {
+  const m = s.match(/\d+/);
+  if (m) return parseInt(m[0], 10);
+  const cn: Record<string, number> = { 零: 0, 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const t = s.match(/[零一两二三四五六七八九十]+/)?.[0];
+  if (!t) return null;
+  if (t === "十") return 10;
+  if (t.length === 1) return cn[t] ?? null;
+  const i = t.indexOf("十");
+  if (i < 0) return null;
+  const head = i === 0 ? 1 : (cn[t[0]] ?? 0);
+  const tail = i === t.length - 1 ? 0 : (cn[t[i + 1]] ?? 0);
+  return head * 10 + tail;
+}
+
+/** 最近曲目命令:关键词 [+ 数字/中文数字] [+ 首/首歌/曲];尾巴不像计数则不算命中(如「最近怎么样」) */
+function matchRecentCommand(text: string, keywords: string[]): string | null {
+  for (const k of keywords) {
+    if (!k || !text.startsWith(k)) continue;
+    const rest = text.slice(k.length).trim();
+    if (rest === "" || /^(?:[0-9]+|[零一两二三四五六七八九十]+)(?:首|首歌|曲)?$/.test(rest)) return rest;
+  }
+  return null;
+}
 
 export class VoicePipeline {
   constructor(
@@ -15,6 +59,7 @@ export class VoicePipeline {
     private indexer: Indexer,
     private commands: CommandsConfig,
     private sem: SearchSemantics,
+    private dl: DlActions,
   ) {}
 
   setCommands(cmds: CommandsConfig) {
@@ -53,7 +98,10 @@ export class VoicePipeline {
     const isDelete = isExactCommand(text, cmds.deleteKeywords);
     const isUndo = isExactCommand(text, cmds.undoDeleteKeywords);
     const keyword = extractPlayKeyword(text, cmds.playKeywords);
-    const isNewPlay = Boolean(keyword) || isRandom;
+    const isDownload = isExactCommand(text, cmds.downloadKeywords);
+    const searchQ = extractAfterKeyword(text, cmds.searchKeywords);
+    const recentRaw = matchRecentCommand(text, cmds.recentKeywords);
+    const isNewPlay = Boolean(keyword) || isRandom || searchQ !== null || recentRaw !== null;
 
     if (matchesAnyKeyword(text, cmds.interruptWhitelistKeywords)) {
       this.engine.scheduleWhitelistAutoResume();
@@ -97,6 +145,18 @@ export class VoicePipeline {
     }
     if (isUndo) {
       await this.undoDelete();
+      return;
+    }
+    if (isDownload) {
+      await this.downloadCurrent();
+      return;
+    }
+    if (searchQ !== null) {
+      await this.searchAndPlay(searchQ);
+      return;
+    }
+    if (recentRaw !== null) {
+      await this.playRecent(recentRaw);
       return;
     }
     if (keyword) {
@@ -155,6 +215,69 @@ export class VoicePipeline {
       return;
     }
     await this.engine.speak(`好的,随机播放${songs.length}首歌曲`);
+    await this.engine.playQueue(songs);
+  }
+
+  /** 语音在线搜索:顺序播放前 N 个 URL 有效的搜索结果试听版本(受播放列表上限约束) */
+  async searchAndPlay(query: string) {
+    const q = query.trim();
+    if (!q) {
+      await this.engine.speak("请说搜索什么歌曲");
+      return;
+    }
+    const limit = Math.max(1, Math.min(10, this.sem.maxResults || 10));
+    this.engine.armReplyInterrupt("voice search");
+    await this.engine.speak(`正在搜索${q}`);
+    let items: UrlItem[] = [];
+    try {
+      items = await this.dl.searchResolve(q, limit);
+    } catch (e) {
+      console.error(`[${this.link.id}] voice search failed:`, e);
+      await this.engine.speak("搜索失败,请稍后再试");
+      return;
+    }
+    if (!items.length) {
+      await this.engine.speak(`没有找到${q}的试听版本`);
+      return;
+    }
+    await this.engine.speak(`找到${items.length}首,开始播放`);
+    await this.engine.playUrlQueue(items, `voice search: ${q}`);
+  }
+
+  /** 下载当前试听版本(语音搜索播放中,或网页手动试听中) */
+  async downloadCurrent() {
+    const live = this.engine.currentUrl;
+    const pv = live ? null : getPreview();
+    const item = live
+      ? { source: live.source, id: live.id, title: live.title, artist: live.artist, url: live.url }
+      : pv
+        ? { source: pv.source, id: pv.id, title: pv.title ?? "", artist: pv.artist ?? "", url: undefined }
+        : null;
+    if (!item) {
+      await this.engine.speak("没有正在试听的曲目");
+      return;
+    }
+    this.engine.armReplyInterrupt("voice download");
+    try {
+      const msg = await this.dl.download(item);
+      await this.engine.speak(msg);
+    } catch (e) {
+      console.error(`[${this.link.id}] download failed:`, e);
+      await this.engine.speak(`下载失败:${String((e as Error).message || e).slice(0, 30)}`);
+    }
+  }
+
+  /** 最新添加的 N 首(未说数字默认 10;受播放列表上限限制) */
+  async playRecent(raw: string) {
+    const wanted = parseCount(raw) ?? 10;
+    const n = Math.max(1, Math.min(wanted, this.sem.maxResults || 20));
+    const songs = this.db.newest(n);
+    if (!songs.length) {
+      await this.engine.speak("曲库为空");
+      return;
+    }
+    this.engine.armReplyInterrupt("voice recent");
+    await this.engine.speak(`播放最新${songs.length}首`);
     await this.engine.playQueue(songs);
   }
 

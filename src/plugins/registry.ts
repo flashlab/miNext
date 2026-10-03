@@ -102,6 +102,42 @@ export class PluginRegistry {
   }
 
   searchPlugins(): SearchPlugin[] { return this.plugins.filter((p): p is SearchPlugin => p.kind === "search"); }
+
+  /** 搜索全部启用音源(HTTP 搜索页与语音在线搜索共用)。运行时互斥:同源注册序靠前者赢 */
+  async searchAll(q: string): Promise<{ results: Record<string, unknown>[]; errors: { source: string; error: string }[] }> {
+    const view = this.view();
+    const searches: Promise<unknown[]>[] = [];
+    const claimed = new Set<string>();
+    for (const p of this.searchPlugins()) {
+      for (const src of p.sources) {
+        const sv = view.find((v) => v.id === p.id)?.sources.find((s) => s.id === src.id);
+        if (!sv?.enabled) continue;
+        if (claimed.has(src.id)) { console.log(`[plugins] 音源 ${src.id} 已被排前的搜索插件接管,跳过 ${p.id}`); continue; }
+        claimed.add(src.id);
+        searches.push(
+          p.search(src.id, q, sv.limit ?? 20, this.ctx)
+            .then((r) => r as unknown[])
+            .catch((e: Error) => [{ __error: String(e?.message ?? e), __source: src.id }]),
+        );
+      }
+    }
+    const settled = await Promise.all(searches);
+    const results: Record<string, unknown>[] = [];
+    const errors: { source: string; error: string }[] = [];
+    for (const r of settled.flat() as Record<string, unknown>[]) {
+      if (r.__error) errors.push({ source: String(r.__source ?? "?"), error: String(r.__error) });
+      else results.push(r);
+    }
+    return { results, errors };
+  }
+
+  /** 以最低音质解析直链(= 试听版本;不下载)。试听页、语音搜索试听、下载当前试听共用 */
+  async resolveLowest(source: string, id: string, meta?: { title?: string; artist?: string; album?: string }, url?: string): Promise<{ fileUrl: string }> {
+    const plugin = this.downloadPluginFor(source);
+    if (!plugin) throw new Error(`${this.sourceDisplayName(source)}未激活下载插件`);
+    const lowest = plugin.qualities?.[source]?.[0];
+    return await plugin.resolve({ source, id, url, quality: lowest, meta }, this.ctx);
+  }
   downloadPlugins(): DownloadPlugin[] { return this.plugins.filter((p): p is DownloadPlugin => p.kind === "download"); }
 
   downloadPluginFor(source: string): DownloadPlugin | null {

@@ -2,6 +2,7 @@
 // 循环模式 / 播完即停 / 音量 / 列表编辑不影响当前播放
 import type { SpeakerLink } from "../protocol/link";
 import { emitNotify } from "../sync";
+import { setPreview } from "../dlPreview";
 import type { SongRow } from "../library/db";
 
 export type LoopMode = "off" | "one" | "all" | "random";
@@ -20,6 +21,18 @@ export interface PlayerSnapshot {
   stopAfterCurrent: boolean;
   volume: number | null;
   playing: "Playing" | "Paused" | "Idle";
+  urlQueue: { index: number; total: number; title: string; artist: string; source: string; id: string; key: string } | null;
+}
+
+/** 直链试听项(语音在线搜索播放;不进曲库列表) */
+export interface UrlItem {
+  key: string;      // `${source}:${id}`
+  source: string;
+  id: string;
+  url: string;      // 已解析的直链(试听版本 = 最低音质)
+  title: string;
+  artist: string;
+  duration: number; // 秒;0=未知(不自动续播)
 }
 
 const sleep = (sec: number) => new Promise((r) => setTimeout(r, sec * 1000));
@@ -31,6 +44,10 @@ export class PlayerEngine {
   private list: SongRow[] = [];
   private cursor = -1;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** 直链试听队列(语音搜索):与曲库列表互不干扰,曲库列表与位置保留 */
+  private urls: UrlItem[] = [];
+  private urlCursor = -1;
+  private urlMode = false;
   private playedForRandom = new Set<number>(); // random 模式防重复
 
   private replyInterruptArmed = false;
@@ -54,6 +71,16 @@ export class PlayerEngine {
     return this.cursor >= 0 && this.cursor < this.list.length ? this.list[this.cursor] : null;
   }
 
+  /** 直链试听队列是否在放 */
+  get urlQueueActive(): boolean {
+    return this.urlMode;
+  }
+
+  /** 当前直链试听项(供「下载当前」用) */
+  get currentUrl(): UrlItem | null {
+    return this.urlMode && this.urlCursor >= 0 && this.urlCursor < this.urls.length ? this.urls[this.urlCursor] : null;
+  }
+
   async snapshot(): Promise<PlayerSnapshot> {
     let volume: number | null = null;
     if (this.link.online) {
@@ -66,6 +93,10 @@ export class PlayerEngine {
       stopAfterCurrent: this.stopAfterCurrent,
       volume,
       playing: this.link.playing,
+      urlQueue: this.currentUrl
+        ? { index: this.urlCursor, total: this.urls.length, title: this.currentUrl.title,
+            artist: this.currentUrl.artist, source: this.currentUrl.source, id: this.currentUrl.id, key: this.currentUrl.key }
+        : null,
     };
   }
 
@@ -140,11 +171,19 @@ export class PlayerEngine {
   }
 
   scheduleWhitelistAutoResume() {
-    if (!this.current) return;
+    const urlMode = this.urlMode;
+    if (urlMode ? !this.currentUrl : !this.current) return;
     const seq = ++this.whitelistResumeSeq;
     if (this.whitelistResumeTimer) clearTimeout(this.whitelistResumeTimer);
     this.whitelistResumeTimer = setTimeout(() => {
-      if (seq !== this.whitelistResumeSeq || !this.current) return;
+      if (seq !== this.whitelistResumeSeq) return;
+      if (this.urlMode) {
+        if (!this.currentUrl) return;
+        this.cancelTimer();
+        void this.startUrl(this.urlCursor, "whitelist auto resume");
+        return;
+      }
+      if (!this.current) return;
       this.cancelTimer();
       this.startSong(this.current, "whitelist auto resume");
     }, Math.max(this.cfg.autoResumeDelaySec, 0.1) * 1000);
@@ -154,6 +193,70 @@ export class PlayerEngine {
 
   private cancelTimer() {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+  }
+
+  /** 语音搜索试听:整体替换直链队列并从头顺序播(压掉曲库队列播放,列表与位置保留) */
+  async playUrlQueue(items: UrlItem[], note: string) {
+    await this.withLock(async () => {
+      this.cancelTimer();
+      if (!items.length) return;
+      await this.link.pausePlayback().catch(() => {});
+      this.urls = [...items];
+      this.urlCursor = -1;
+      this.urlMode = true;
+      this.log(`url queue start: ${items.length} 首 (${note})`);
+      await this.startUrl(0, note);
+    });
+  }
+
+  /** 起播直链队列第 idx 项;失败自动跳过下一首 */
+  private async startUrl(idx: number, trigger: string) {
+    const it = this.urls[idx];
+    if (!it) { this.finishUrlQueue("队列播完"); return; }
+    this.replyInterruptArmed = false;
+    this.urlCursor = idx;
+    try {
+      await this.link.playUrl(it.url);
+    } catch (e) {
+      this.log(`试听播放失败(${it.title || it.key}): ${e}`);
+      emitNotify("error", `无法播放「${it.title || it.key}」`);
+      if (idx + 1 < this.urls.length) await this.startUrl(idx + 1, `${trigger} skip`);
+      else this.finishUrlQueue("全部失败");
+      return;
+    }
+    this.log(`url start: trigger=${trigger} ${idx + 1}/${this.urls.length} ${it.title}${it.duration > 0 ? ` duration=${it.duration.toFixed(1)}s` : " duration=unknown"}`);
+    // 共享试听态:跨标签页/跨设备可见(网页正好搜到同一条时可点停止)
+    setPreview({
+      key: it.key, source: it.source, id: it.id,
+      instance: this.link.id, instanceName: this.link.name,
+      title: it.title, artist: it.artist, duration: it.duration,
+    });
+    this.cancelTimer();
+    // 时长未知(0)时不自动续播:保持到手动下一首/停止,避免 1 秒就跳过
+    if (it.duration > 0) {
+      const waitMs = it.duration * 1000 + this.cfg.timerBufferSec * 1000;
+      this.timer = setTimeout(() => void this.onTimer(), waitMs);
+    }
+  }
+
+  /** 直链队列收尾:清态(定时器/当前项);playing 自然转 Idle */
+  private finishUrlQueue(reason: string) {
+    this.cancelTimer();
+    this.urlMode = false;
+    this.urls = [];
+    this.urlCursor = -1;
+    this.log(`url queue end: ${reason}`);
+  }
+
+  /** 只释放直链队列(不打断正在播的声音;供网页手动试听/停止前调用) */
+  releaseUrlQueue(note: string) {
+    if (!this.urlMode && !this.urls.length) return;
+    this.finishUrlQueue(`release: ${note}`);
+  }
+
+  private async urlAdvance(trigger: string) {
+    if (this.urlCursor + 1 < this.urls.length) await this.startUrl(this.urlCursor + 1, trigger);
+    else this.finishUrlQueue(`播完(${trigger})`);
   }
 
   private async startSong(song: SongRow, trigger: string) {
@@ -176,6 +279,7 @@ export class PlayerEngine {
   private async onTimer() {
     this.timer = null;
     await this.withLock(async () => {
+      if (this.urlMode) { await this.urlAdvance("auto"); return; }
       if (!this.current) return;
 
       if (this.stopAfterCurrent) {
@@ -264,6 +368,17 @@ export class PlayerEngine {
   /** 停止/继续合并 toggle */
   async toggle(): Promise<"stopped" | "resumed" | "noop"> {
     return await this.withLock(async () => {
+      if (this.urlMode) {
+        if (this.link.playing === "Playing") {
+          this.cancelTimer();
+          await this.link.pausePlayback().catch(() => {});
+          return "stopped" as const;
+        }
+        this.cancelTimer();
+        await sleep(this.cfg.replyInterruptCooldownSec);
+        await this.startUrl(this.urlCursor >= 0 ? this.urlCursor : 0, "url toggle resume");
+        return "resumed" as const;
+      }
       if (this.link.playing === "Playing") {
         this.cancelTimer();
         await this.link.pausePlayback().catch(() => {});
@@ -286,7 +401,14 @@ export class PlayerEngine {
   async next() {
     await this.withLock(async () => {
       this.cancelTimer();
-      if (this.cursor + 1 >= this.list.length && this.loop !== "all") {
+      if (this.urlMode) {
+        if (this.urlCursor + 1 >= this.urls.length) { await this.speak("当前没有下一首"); return; }
+        await sleep(this.cfg.replyInterruptCooldownSec);
+        await this.urlAdvance("manual next");
+        return;
+      }
+      // random 模式下尾部仍可继续(advance 会随机抽未播项),不能按"没有下一首"拒掉
+      if (this.cursor + 1 >= this.list.length && this.loop !== "all" && this.loop !== "random") {
         await this.speak("当前没有下一首");
         return;
       }
@@ -298,6 +420,13 @@ export class PlayerEngine {
 
   async prev() {
     await this.withLock(async () => {
+      if (this.urlMode) {
+        if (this.urlCursor <= 0) { await this.speak("当前没有上一首"); return; }
+        this.cancelTimer();
+        await sleep(this.cfg.replyInterruptCooldownSec);
+        await this.startUrl(this.urlCursor - 1, "manual previous");
+        return;
+      }
       if (this.cursor <= 0) {
         await this.speak("当前没有上一首");
         return;
@@ -326,6 +455,7 @@ export class PlayerEngine {
   async stop(note = "") {
     await this.withLock(async () => {
       this.cancelTimer();
+      if (this.urlMode) this.finishUrlQueue(`stop${note ? ` (${note})` : ""}`);
       await this.link.pausePlayback().catch(() => {});
       this.log(`stop(保留列表)${note ? ` (${note})` : ""}`);
     });
