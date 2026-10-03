@@ -156,6 +156,12 @@ export function createHttpServer(deps: HttpDeps) {
     };
   }
 
+  /** 让曲目顺序与请求一致(db.getByPaths 受 SQL IN 顺序影响,可能乱序) */
+  function orderByPaths<T extends { path: string }>(rows: T[], paths: string[]): T[] {
+    const byPath = new Map(rows.map((r) => [r.path, r]));
+    return paths.map((p) => byPath.get(p)).filter((r): r is T => Boolean(r));
+  }
+
   async function api(req: Request, url: URL, ip: string): Promise<Response> {
     const parts = url.pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
     const method = req.method;
@@ -634,7 +640,7 @@ export function createHttpServer(deps: HttpDeps) {
         const body = (await req.json()) as { paths?: string[]; keyword?: string };
         if (body.keyword) { void voice.playByKeyword(body.keyword); emitInvalidate(`player:${id}`); return json({ ok: true }); }
         if (body.paths?.length) {
-          const songs = db.getByPaths(body.paths);
+          const songs = orderByPaths(db.getByPaths(body.paths), body.paths);
           if (!songs.length) return err("没有匹配的歌曲");
           void engine.playQueue(songs);
           emitInvalidate(`player:${id}`);
@@ -645,7 +651,7 @@ export function createHttpServer(deps: HttpDeps) {
       if (action === "append" && method === "POST") {
         const { paths } = (await req.json()) as { paths?: string[] };
         if (!paths?.length) return err("缺少 paths");
-        const songs = db.getByPaths(paths);
+        const songs = orderByPaths(db.getByPaths(paths), paths);
         void engine.appendQueue(songs);
         emitInvalidate(`player:${id}`);
         return json({ ok: true, count: songs.length });
