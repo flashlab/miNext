@@ -252,6 +252,11 @@ export class SpeakerLink {
     if (r.exit_code !== 0) {
       throw new Error(`play-url 失败(exit ${r.exit_code}): ${(r.stderr || r.stdout || "").trim().slice(0, 160)}`);
     }
+    // shell 成功但设备拒绝播放时 ubus 仍返回 exit 0 + {"code":非0} —— 也要当失败
+    const m = /"code"\s*:\s*(-?\d+)/.exec(r.stdout ?? "");
+    if (m && m[1] !== "0") {
+      throw new Error(`play-url 被设备拒绝(code ${m[1]}): ${(r.stdout ?? "").trim().replace(/\s+/g, " ").slice(0, 160)}`);
+    }
     return r;
   }
 
