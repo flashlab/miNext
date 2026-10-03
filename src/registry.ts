@@ -51,6 +51,7 @@ export class SpeakerRegistry {
     const link = new SpeakerLink(row.id, row.name, row.ws_port);
     const engine = new PlayerEngine(link, this.deps.playerCfg, this.deps.fileUrl, (m) =>
       console.log(`[${row.id}] ${m}`),
+      this.deps.dl, // 直链按需解析(试听队列)
     );
     const voice = new VoicePipeline(link, engine, this.deps.db, this.deps.indexer, commands, this.deps.getSearchSem(), this.deps.dl);
     voice.attach();

@@ -55,38 +55,40 @@ const dirsContain = (p: string) => getDirs().some((d) => {
 const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
   Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error("解析超时")), ms))]);
 
-/** 语音在线搜索:逐条解析直链(最低音质 = 试听版本),失败/超时跳过,最多 limit 条,总预算 25s */
-async function voiceSearchResolve(q: string, limit: number): Promise<UrlItem[]> {
+/** 语音在线搜索:只搜不解析(整列留在内存里;直链等播到那首/要下载时才解析,避免预解析触发上游限制) */
+async function voiceSearchList(q: string): Promise<UrlItem[]> {
   const { results, errors } = await plugins.searchAll(q);
   for (const e of errors) console.log(`[voice search] 源失败 ${e.source}: ${e.error}`);
   const items: UrlItem[] = [];
-  const deadline = Date.now() + 25_000;
   for (const r of results) {
-    if (items.length >= limit || Date.now() > deadline) break;
     const source = String(r.source ?? "");
     const id = String(r.id ?? "");
     if (!source || !id) continue;
-    const title = String(r.title ?? "");
-    const artist = String(r.artist ?? "");
-    try {
-      const rv = await withTimeout(
-        plugins.resolveLowest(source, id, { title, artist, album: r.album ? String(r.album) : undefined }),
-        6000,
-      );
-      if (!rv?.fileUrl) continue;
-      const dur = typeof r.duration === "number" ? r.duration : 0;
-      items.push({ key: `${source}:${id}`, source, id, url: rv.fileUrl, title, artist, duration: dur > 0 ? dur : 0 });
-    } catch (e) {
-      console.log(`[voice search] 跳过 ${source}:${id} - ${String((e as Error).message || e)}`);
-    }
+    const dur = typeof r.duration === "number" ? r.duration : 0;
+    items.push({
+      key: `${source}:${id}`, source, id,
+      title: String(r.title ?? ""), artist: String(r.artist ?? ""),
+      album: r.album ? String(r.album) : undefined,
+      duration: dur > 0 ? dur : 0,
+    });
   }
-  console.log(`[voice search] "${q}": ${items.length}/${results.length} 条可用试听直链`);
+  console.log(`[voice search] "${q}": ${items.length} 条结果(直链待按需解析)`);
   return items;
 }
 
-/** 语音能力:在线搜索试听 / 下载当前试听版本 */
+/** 语音能力:在线搜索试听(懒解析) / 下载当前试听版本 */
 const dlActions: DlActions = {
-  searchResolve: voiceSearchResolve,
+  searchList: voiceSearchList,
+  // 按需解析单条试听直链:带 6s 超时,失败抛错由引擎顺延下一首
+  resolvePreview: async (it) => {
+    console.log(`[voice search] 按需解析 ${it.source}:${it.id} ${it.title ?? ""}`);
+    const rv = await withTimeout(
+      plugins.resolveLowest(it.source, it.id, { title: it.title, artist: it.artist, album: it.album }),
+      6000,
+    );
+    if (!rv?.fileUrl) throw new Error("解析结果为空");
+    return rv.fileUrl;
+  },
   download: async (item) => {
     const dir = getDefaultDir();
     if (!dir || !dirsContain(dir)) throw new Error("未设置下载目录");

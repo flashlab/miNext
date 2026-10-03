@@ -10,8 +10,10 @@ import { getPreview } from "../dlPreview";
 
 /** 语音在线搜索/下载的宿主能力(由 index.ts 注入,依赖 plugins/jobs) */
 export interface DlActions {
-  /** 搜索并解析出最多 limit 个可用的试听直链(顺序与搜索结果一致,失败的跳过) */
-  searchResolve(query: string, limit: number): Promise<UrlItem[]>;
+  /** 在线搜索:只返回结果列表(不解析直链——预解析易触发上游限制;解析留到播放/下载时按需做) */
+  searchList(query: string): Promise<UrlItem[]>;
+  /** 按需解析单条试听直链(最低音质=试听版本) */
+  resolvePreview(item: { source: string; id: string; title?: string; artist?: string; album?: string }): Promise<string>;
   /** 把试听项加入下载队列(下载到默认下载目录);返回给用户播报的结果 */
   download(item: { source: string; id: string; title?: string; artist?: string; url?: string }): Promise<string>;
 }
@@ -218,26 +220,25 @@ export class VoicePipeline {
     await this.engine.playQueue(songs);
   }
 
-  /** 语音在线搜索:顺序播放前 N 个 URL 有效的搜索结果试听版本(受播放列表上限约束) */
+  /** 语音在线搜索:整列顺序试听;直链按播放/下载时机逐条解析,失败自动顺延,不限试听总数 */
   async searchAndPlay(query: string) {
     const q = query.trim();
     if (!q) {
       await this.engine.speak("请说搜索什么歌曲");
       return;
     }
-    const limit = Math.max(1, Math.min(10, this.sem.maxResults || 10));
     this.engine.armReplyInterrupt("voice search");
     await this.engine.speak(`正在搜索${q}`);
     let items: UrlItem[] = [];
     try {
-      items = await this.dl.searchResolve(q, limit);
+      items = await this.dl.searchList(q);
     } catch (e) {
       console.error(`[${this.link.id}] voice search failed:`, e);
       await this.engine.speak("搜索失败,请稍后再试");
       return;
     }
     if (!items.length) {
-      await this.engine.speak(`没有找到${q}的试听版本`);
+      await this.engine.speak(`没有找到${q}的试听歌曲`);
       return;
     }
     await this.engine.speak(`找到${items.length}首,开始播放`);

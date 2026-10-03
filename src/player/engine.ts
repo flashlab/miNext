@@ -29,11 +29,21 @@ export interface UrlItem {
   key: string;      // `${source}:${id}`
   source: string;
   id: string;
-  url: string;      // 已解析的直链(试听版本 = 最低音质)
   title: string;
   artist: string;
+  album?: string;
   duration: number; // 秒;0=未知(不自动续播)
+  /** 试听直链:播放/下载时才按需解析并缓存(不预解析整列,避免触发上游限制) */
+  url?: string;
 }
+
+/** 按需解析试听直链(最低音质=试听版本);由 index.ts 注入 */
+export interface UrlResolver {
+  resolvePreview(item: { source: string; id: string; title?: string; artist?: string; album?: string }): Promise<string>;
+}
+
+/** 连续解析/起播失败达到该值 → 停止整列(防失效源把队列刷屏) */
+const URL_FAIL_STREAK_LIMIT = 5;
 
 const sleep = (sec: number) => new Promise((r) => setTimeout(r, sec * 1000));
 
@@ -48,6 +58,7 @@ export class PlayerEngine {
   private urls: UrlItem[] = [];
   private urlCursor = -1;
   private urlMode = false;
+  private urlFailStreak = 0; // 连续解析/起播失败计数
   private playedForRandom = new Set<number>(); // random 模式防重复
 
   private replyInterruptArmed = false;
@@ -65,6 +76,7 @@ export class PlayerEngine {
     private cfg: PlayerConfig,
     private fileUrl: (path: string) => string,
     private log: (msg: string) => void = console.log,
+    private resolveUrl?: UrlResolver,
   ) {}
 
   get current(): SongRow | null {
@@ -204,26 +216,54 @@ export class PlayerEngine {
       this.urls = [...items];
       this.urlCursor = -1;
       this.urlMode = true;
+      this.urlFailStreak = 0;
       this.log(`url queue start: ${items.length} 首 (${note})`);
       await this.startUrl(0, note);
     });
   }
 
-  /** 起播直链队列第 idx 项;失败自动跳过下一首 */
+  /** 起播直链队列第 idx 项:直链按需解析(缓存复用);解析或起播失败自动顺延下一首 */
   private async startUrl(idx: number, trigger: string) {
     const it = this.urls[idx];
     if (!it) { this.finishUrlQueue("队列播完"); return; }
     this.replyInterruptArmed = false;
     this.urlCursor = idx;
+    let url = it.url ?? "";
+    if (!url) {
+      try {
+        if (!this.resolveUrl) throw new Error("未接入直链解析器");
+        url = await this.resolveUrl.resolvePreview({ source: it.source, id: it.id, title: it.title, artist: it.artist, album: it.album });
+        if (!url) throw new Error("解析结果为空");
+        it.url = url; // 缓存:重播同一首、下载当前都直接用
+      } catch (e) {
+        this.urlFailStreak++;
+        this.log(`试听解析失败(${it.title || it.key}): ${e} → 顺延下一首`);
+        if (this.urlFailStreak >= URL_FAIL_STREAK_LIMIT) {
+          await this.speak("试听源暂时不可用");
+          this.finishUrlQueue(`连续解析失败 ${this.urlFailStreak} 首`);
+          return;
+        }
+        if (idx + 1 < this.urls.length) await this.startUrl(idx + 1, `${trigger} skip`);
+        else this.finishUrlQueue("全部失败");
+        return;
+      }
+    }
     try {
-      await this.link.playUrl(it.url);
+      await this.link.playUrl(url);
     } catch (e) {
+      this.urlFailStreak++;
       this.log(`试听播放失败(${it.title || it.key}): ${e}`);
       emitNotify("error", `无法播放「${it.title || it.key}」`);
+      if (this.urlFailStreak >= URL_FAIL_STREAK_LIMIT) {
+        emitNotify("error", "试听源连续失败,已停止");
+        this.finishUrlQueue(`连续起播失败 ${this.urlFailStreak} 首`);
+        return;
+      }
       if (idx + 1 < this.urls.length) await this.startUrl(idx + 1, `${trigger} skip`);
       else this.finishUrlQueue("全部失败");
       return;
     }
+    this.urlFailStreak = 0;
     this.log(`url start: trigger=${trigger} ${idx + 1}/${this.urls.length} ${it.title}${it.duration > 0 ? ` duration=${it.duration.toFixed(1)}s` : " duration=unknown"}`);
     // 共享试听态:跨标签页/跨设备可见(网页正好搜到同一条时可点停止)
     setPreview({
@@ -245,6 +285,7 @@ export class PlayerEngine {
     this.urlMode = false;
     this.urls = [];
     this.urlCursor = -1;
+    this.urlFailStreak = 0;
     this.log(`url queue end: ${reason}`);
   }
 
